@@ -15,6 +15,7 @@ mod benchmark_tests;
 mod benchmarks;
 mod bet_management_tests;
 mod create_pool_validation_tests;
+mod creator_deadline_claim_tests;
 mod e2e_tests;
 mod fee_config_tests;
 mod fuzz;
@@ -385,6 +386,14 @@ pub enum ContractError {
     DuplicateToken = 67,
     /// A scheduled claim is not yet due for execution.
     ScheduledClaimNotDue = 68,
+    /// The pool creator is not allowed to bet on their own pool.
+    CreatorCannotBet = 69,
+    /// The custom deposit deadline is invalid (must be > now and < resolution
+    /// deadline / pool expiry).
+    InvalidDepositDeadline = 70,
+    /// The pool's deposit deadline has passed; betting is closed even though
+    /// the pool has not yet reached its resolution deadline.
+    DepositDeadlinePassed = 71,
 }
 
 /// #176 — Settlement source tag indicating who initiated pool settlement.
@@ -473,6 +482,12 @@ pub struct Pool {
     pub winning_outcome: Option<u32>,
     pub created_at: u64,
     pub expiry: u64,
+    /// Timestamp after which no new bets are accepted (the betting-window
+    /// cutoff). Always `<= expiry` (the
+    /// resolution deadline). When a creator does not specify a custom value at
+    /// creation it defaults to `expiry`, preserving the original behaviour of
+    /// betting being open right up to the resolution deadline.
+    pub deposit_deadline: u64,
     /// Current operational status of the pool. Defaults to `Open`.
     pub status: PoolStatus,
     /// Cumulative betting volume routed through this pool, incremented by the
@@ -896,6 +911,27 @@ pub struct ReferralRewardClaimedEvent {
 pub struct ClaimAllEntry {
     pub pool_id: u32,
     pub amount: i128,
+}
+
+/// Per-token payout entry within a multi-asset claim. `amount` is in the raw
+/// units of `token` (not normalised to base units).
+#[derive(Clone, Debug, PartialEq)]
+#[contracttype]
+pub struct AssetClaimEntry {
+    pub token: Address,
+    pub amount: i128,
+}
+
+/// Result returned by `claim_multi_asset_winnings`. `total_normalized` is the
+/// claim value expressed in base-token units (the figure used for analytics and
+/// odds), while `per_asset` breaks the payout down into the raw amount paid for
+/// each token the pool accepted. This lets the frontend display exactly how
+/// much of each asset a winner received without reading events.
+#[derive(Clone, Debug, PartialEq)]
+#[contracttype]
+pub struct MultiAssetClaimResult {
+    pub total_normalized: i128,
+    pub per_asset: Vec<AssetClaimEntry>,
 }
 
 /// Event payload emitted by `cancel_bet` (partial/full bet cancellation).
@@ -1901,6 +1937,7 @@ impl PredinexContract {
         status: PoolStatus,
         twap_period_secs: u64,
         template_id: Option<u32>,
+        deposit_deadline: Option<u64>,
     ) -> Result<u32, ContractError> {
         // Check length bounds before calling validate_non_empty_string, which
         // calls copy_into_slice internally. Attempting to copy an oversized
@@ -1985,6 +2022,21 @@ impl PredinexContract {
         let expiry = created_at
             .checked_add(duration)
             .ok_or(ContractError::ExpiryOverflow)?;
+
+        // Resolve the betting cutoff. A creator-supplied deposit deadline must
+        // be strictly in the future and strictly before the resolution
+        // deadline (`expiry`). When omitted it defaults to `expiry`, so betting
+        // stays open right up to resolution — the original behaviour.
+        let deposit_deadline = match deposit_deadline {
+            Some(dd) => {
+                if dd <= env.ledger().timestamp() || dd >= expiry {
+                    return Err(ContractError::InvalidDepositDeadline);
+                }
+                dd
+            }
+            None => expiry,
+        };
+
         let outcome_a = outcomes.get(0).unwrap();
         let outcome_b = outcomes.get(1).unwrap();
 
@@ -2001,6 +2053,7 @@ impl PredinexContract {
             winning_outcome: None,
             created_at,
             expiry,
+            deposit_deadline,
             status,
             cumulative_volume: 0,
             template_id,
@@ -2076,6 +2129,7 @@ impl PredinexContract {
         outcome_b: String,
         duration: u64,
         amount: i128,
+        deposit_deadline: Option<u64>,
     ) -> Result<u32, ContractError> {
         if !Self::is_initialized(&env) {
             panic_with_error!(&env, ContractError::NotInitialized);
@@ -2102,6 +2156,7 @@ impl PredinexContract {
             PoolStatus::Open,
             DEFAULT_TWAP_PERIOD_SECS,
             None,
+            deposit_deadline,
         )
     }
 
@@ -2132,6 +2187,7 @@ impl PredinexContract {
             PoolStatus::Open,
             twap_period_secs,
             None,
+            None,
         )
     }
 
@@ -2156,6 +2212,7 @@ impl PredinexContract {
             env.ledger().timestamp(),
             PoolStatus::Open,
             DEFAULT_TWAP_PERIOD_SECS,
+            None,
             None,
         )
     }
@@ -2182,6 +2239,7 @@ impl PredinexContract {
             env.ledger().timestamp(),
             PoolStatus::Open,
             twap_period_secs,
+            None,
             None,
         )
     }
@@ -2222,6 +2280,7 @@ impl PredinexContract {
             open_at,
             PoolStatus::Scheduled(open_at),
             DEFAULT_TWAP_PERIOD_SECS,
+            None,
             None,
         )?;
         let scheduled = ScheduledPool {
@@ -2402,8 +2461,24 @@ impl PredinexContract {
             return Err(ContractError::PoolNotOpen);
         }
 
+        // The pool creator has inside knowledge of the eventual resolution and
+        // is barred from betting on their own pool. Checked before the time
+        // windows so the creator always gets the clearer CreatorCannotBet error.
+        if user == pool.creator {
+            return Err(ContractError::CreatorCannotBet);
+        }
+
         if env.ledger().timestamp() >= pool.expiry {
             return Err(ContractError::PoolExpired);
+        }
+
+        // Enforce a custom deposit deadline (betting cutoff) when one was set
+        // earlier than the resolution deadline. Pools without a custom deadline
+        // have `deposit_deadline == expiry`, so this is a no-op for them and the
+        // expiry check above governs.
+        if pool.deposit_deadline < pool.expiry && env.ledger().timestamp() >= pool.deposit_deadline
+        {
+            return Err(ContractError::DepositDeadlinePassed);
         }
 
         let outcomes = Self::read_outcomes(&env, pool_id, &pool);
@@ -5404,6 +5479,7 @@ impl PredinexContract {
             PoolStatus::Open,
             DEFAULT_TWAP_PERIOD_SECS,
             Some(template_id),
+            None,
         )?;
         env.events().publish(
             (
@@ -6168,6 +6244,7 @@ impl PredinexContract {
         duration: u64,
         allowed_tokens: Vec<Address>,
         metadata_uri: Option<String>,
+        deposit_deadline: Option<u64>,
     ) -> Result<u32, ContractError> {
         creator.require_auth();
 
@@ -6206,6 +6283,7 @@ impl PredinexContract {
             PoolStatus::Open,
             DEFAULT_TWAP_PERIOD_SECS,
             None,
+            deposit_deadline,
         )?;
         env.storage()
             .persistent()
@@ -6421,8 +6499,22 @@ impl PredinexContract {
         if pool.status != PoolStatus::Open {
             return Err(ContractError::PoolNotOpen);
         }
+
+        // The pool creator may not bet on their own multi-asset pool (mirrors
+        // single-asset place_bet). Checked before the time windows.
+        if user == pool.creator {
+            return Err(ContractError::CreatorCannotBet);
+        }
+
         if env.ledger().timestamp() >= pool.expiry {
             return Err(ContractError::PoolExpired);
+        }
+
+        // Enforce the optional custom deposit deadline. No-op when the pool used
+        // the default (deposit_deadline == expiry).
+        if pool.deposit_deadline < pool.expiry && env.ledger().timestamp() >= pool.deposit_deadline
+        {
+            return Err(ContractError::DepositDeadlinePassed);
         }
 
         let outcomes = Self::read_outcomes(&env, pool_id, &pool);
@@ -6709,7 +6801,7 @@ impl PredinexContract {
         env: Env,
         user: Address,
         pool_id: u32,
-    ) -> Result<i128, ContractError> {
+    ) -> Result<MultiAssetClaimResult, ContractError> {
         user.require_auth();
         Self::require_not_paused(&env)?;
 
@@ -6779,7 +6871,10 @@ impl PredinexContract {
         }
 
         // Payout: user receives (net_T × user_norm / total_norm_winning) of each token.
+        // `per_asset` records the raw amount paid for every token so the caller
+        // gets a full per-asset breakdown of the claim.
         let mut total_norm_paid: i128 = 0;
+        let mut per_asset: Vec<AssetClaimEntry> = Vec::new(&env);
         for i in 0..allowed.len() {
             let tok = allowed.get(i).ok_or(ContractError::PoolNotFound)?;
             let deposit: i128 = env
@@ -6804,6 +6899,10 @@ impl PredinexContract {
                     &payout_t,
                 );
                 total_norm_paid += payout_t;
+                per_asset.push_back(AssetClaimEntry {
+                    token: tok.clone(),
+                    amount: payout_t,
+                });
             }
         }
 
@@ -6926,7 +7025,10 @@ impl PredinexContract {
             .persistent()
             .extend_ttl(&total_key, POOL_BUMP_THRESHOLD, POOL_BUMP_TARGET);
 
-        Ok(total_norm_paid)
+        Ok(MultiAssetClaimResult {
+            total_normalized: total_norm_paid,
+            per_asset,
+        })
     }
 
     /// Rescue tokens accidentally sent directly to the contract address.
