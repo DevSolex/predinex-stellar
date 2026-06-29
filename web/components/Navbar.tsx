@@ -311,70 +311,95 @@ export default function Navbar() {
                 )}
             </nav>
 
-            {/* Bottom Navigation - Mobile Only (Connected State) */}
-            {isMounted && isConnected && (
-                <nav className="fixed bottom-0 left-0 right-0 md:hidden glass-panel !rounded-none !border-x-0 !border-b-0 border-t border-white/10 shadow-lg" aria-label="Mobile bottom navigation">
-                    <div className="flex items-center justify-around h-16 max-w-7xl mx-auto w-full px-4">
+            {/* #715 — Bottom Navigation - Mobile Only (all users) */}
+            {isMounted && (
+                <nav className="fixed bottom-0 left-0 right-0 md:hidden glass-panel !rounded-none !border-x-0 !border-b-0 border-t border-white/10 shadow-lg z-50" aria-label="Mobile bottom navigation" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
+                    <div className="flex items-center justify-around h-16 max-w-7xl mx-auto w-full px-2">
                         <Link
                             href="/"
-                            className={`flex flex-col items-center justify-center gap-1 p-2 rounded-lg transition-colors ${
+                            className={`flex flex-col items-center justify-center gap-0.5 min-w-[3.5rem] p-1.5 rounded-lg transition-colors ${
                                 isActive('/')
                                     ? 'text-primary bg-primary/10'
                                     : 'text-muted-foreground hover:text-primary'
                             }`}
                             aria-label="Home"
-                            title="Home"
                         >
                             <Home className="h-5 w-5" />
-                            <span className="text-xs font-medium">Home</span>
+                            <span className="text-[10px] font-medium">Home</span>
                         </Link>
                         <Link
                             href="/markets"
-                            className={`flex flex-col items-center justify-center gap-1 p-2 rounded-lg transition-colors ${
-                                isActive('/markets')
+                            className={`flex flex-col items-center justify-center gap-0.5 min-w-[3.5rem] p-1.5 rounded-lg transition-colors ${
+                                isActive('/markets') || pathname?.startsWith('/markets/')
                                     ? 'text-primary bg-primary/10'
                                     : 'text-muted-foreground hover:text-primary'
                             }`}
-                            aria-label="Markets"
-                            title="Markets"
+                            aria-label="Pools"
                         >
                             <Zap className="h-5 w-5" />
-                            <span className="text-xs font-medium">Markets</span>
+                            <span className="text-[10px] font-medium">Pools</span>
                         </Link>
-                        <Link
-                            href="/dashboard"
-                            className={`flex flex-col items-center justify-center gap-1 p-2 rounded-lg transition-colors ${
-                                isActive('/dashboard')
-                                    ? 'text-primary bg-primary/10'
-                                    : 'text-muted-foreground hover:text-primary'
-                            }`}
-                            aria-label="Dashboard"
-                            title="Dashboard"
-                        >
-                            <span className="text-lg">📊</span>
-                            <span className="text-xs font-medium">Dashboard</span>
-                        </Link>
-                        <button
-                            onClick={toggleTheme}
-                            className="flex flex-col items-center justify-center gap-1 p-2 rounded-lg text-muted-foreground hover:text-primary transition-colors"
-                            aria-label={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}
-                            title={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}
-                        >
-                            {theme === 'light' ? <Moon className="h-5 w-5" /> : <Sun className="h-5 w-5" />}
-                            <span className="text-xs font-medium">Theme</span>
-                        </button>
+                        {isConnected ? (
+                            <Link
+                                href="/dashboard"
+                                className={`flex flex-col items-center justify-center gap-0.5 min-w-[3.5rem] p-1.5 rounded-lg transition-colors ${
+                                    isActive('/dashboard')
+                                        ? 'text-primary bg-primary/10'
+                                        : 'text-muted-foreground hover:text-primary'
+                                }`}
+                                aria-label="Bets"
+                            >
+                                <Wallet className="h-5 w-5" />
+                                <span className="text-[10px] font-medium">Bets</span>
+                            </Link>
+                        ) : (
+                            <button
+                                onClick={connect}
+                                className="flex flex-col items-center justify-center gap-0.5 min-w-[3.5rem] p-1.5 rounded-lg text-muted-foreground hover:text-primary transition-colors"
+                                aria-label="Connect wallet"
+                            >
+                                <Wallet className="h-5 w-5" />
+                                <span className="text-[10px] font-medium">Connect</span>
+                            </button>
+                        )}
+                        {isConnected ? (
+                            <Link
+                                href="/activity"
+                                className={`flex flex-col items-center justify-center gap-0.5 min-w-[3.5rem] p-1.5 rounded-lg transition-colors ${
+                                    isActive('/activity')
+                                        ? 'text-primary bg-primary/10'
+                                        : 'text-muted-foreground hover:text-primary'
+                                }`}
+                                aria-label="Activity"
+                            >
+                                <Menu className="h-5 w-5" />
+                                <span className="text-[10px] font-medium">Activity</span>
+                            </Link>
+                        ) : (
+                            <Link
+                                href="/analytics"
+                                className={`flex flex-col items-center justify-center gap-0.5 min-w-[3.5rem] p-1.5 rounded-lg transition-colors ${
+                                    isActive('/analytics')
+                                        ? 'text-primary bg-primary/10'
+                                        : 'text-muted-foreground hover:text-primary'
+                                }`}
+                                aria-label="Analytics"
+                            >
+                                <Menu className="h-5 w-5" />
+                                <span className="text-[10px] font-medium">Analytics</span>
+                            </Link>
+                        )}
                         <Link
                             href="/settings"
-                            className={`flex flex-col items-center justify-center gap-1 p-2 rounded-lg transition-colors ${
+                            className={`flex flex-col items-center justify-center gap-0.5 min-w-[3.5rem] p-1.5 rounded-lg transition-colors ${
                                 isActive('/settings')
                                     ? 'text-primary bg-primary/10'
                                     : 'text-muted-foreground hover:text-primary'
                             }`}
                             aria-label="Settings"
-                            title="Settings"
                         >
                             <Settings className="h-5 w-5" />
-                            <span className="text-xs font-medium">Settings</span>
+                            <span className="text-[10px] font-medium">Settings</span>
                         </Link>
                     </div>
                 </nav>

@@ -266,6 +266,7 @@ export default function BettingSection({ pool, poolId, onBetSuccess }: BettingSe
                 <input
                     id="bet-amount"
                     type="number"
+                    inputMode="decimal"
                     step="0.1"
                     min={hasMinBet ? String(minBetXlm) : undefined}
                     max={hasMaxBet && maxBetXlm !== null ? String(maxBetXlm) : undefined}
@@ -275,30 +276,34 @@ export default function BettingSection({ pool, poolId, onBetSuccess }: BettingSe
                     onBlur={() => setAmountTouched(true)}
                     disabled={isBetting || (walletBalance !== null && hasMinBet && walletBalance < minBetXlm) || isMismatch}
                     aria-label="Enter bet amount in XLM"
-                    aria-invalid={showAmountError}
-                    aria-describedby={showAmountError ? 'bet-amount-error' : 'bet-limits'}
-                    className={`w-full px-4 py-3 rounded-lg bg-background border outline-none focus:ring-2 ${
-                        showAmountError
-                            ? 'border-red-500 focus:border-red-500 focus:ring-red-500/50'
-                            : 'border-input focus:border-primary focus:ring-primary/50'
-                    }`}
+                    aria-describedby="bet-limits"
+                    className="w-full px-4 py-3 rounded-lg bg-background border border-input outline-none focus:border-primary focus:ring-2 focus:ring-primary/50 text-base"
                 />
-                {showAmountError ? (
-                    <p
-                        id="bet-amount-error"
-                        role="alert"
-                        className="text-xs text-red-500 mt-2 flex items-center gap-1"
-                    >
-                        <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                        {amountError}
-                    </p>
-                ) : (
-                    <p id="bet-limits" className="text-xs text-muted-foreground mt-2">
-                        Bet limits:{' '}
-                        {hasMinBet ? `Min ${minBetXlm} XLM` : 'No minimum'}
-                        {hasMaxBet && maxBetXlm !== null ? `, Max ${maxBetXlm} XLM` : ', No maximum'}
-                    </p>
+                {/* #715 — Quick-select percentage buttons for mobile */}
+                {walletBalance !== null && walletBalance > 0 && (
+                    <div className="flex gap-2 mt-2" role="group" aria-label="Quick bet percentage">
+                        {[10, 25, 50, 100].map((pct) => {
+                            const amt = Math.floor((walletBalance * pct) / 100 * 10) / 10;
+                            return (
+                                <button
+                                    key={pct}
+                                    type="button"
+                                    onClick={() => setBetAmount(String(amt))}
+                                    disabled={isBetting || isMismatch}
+                                    className="flex-1 py-2 text-xs font-semibold rounded-lg border border-border bg-muted/50 hover:bg-primary/10 hover:border-primary/30 text-muted-foreground hover:text-primary transition-colors disabled:opacity-50"
+                                    aria-label={`Set bet to ${pct}% of balance`}
+                                >
+                                    {pct}%
+                                </button>
+                            );
+                        })}
+                    </div>
                 )}
+                <p id="bet-limits" className="text-xs text-muted-foreground mt-2">
+                    Bet limits:{' '}
+                    {hasMinBet ? `Min ${minBetXlm} XLM` : 'No minimum'}
+                    {hasMaxBet && maxBetXlm !== null ? `, Max ${maxBetXlm} XLM` : ', No maximum'}
+                </p>
             </div>
 
             {/* Bet buttons */}

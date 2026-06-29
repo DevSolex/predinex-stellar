@@ -223,9 +223,31 @@ nav a,
     padding-bottom: calc(4rem + env(safe-area-inset-bottom, 0px));
 }
 
-/* ── #722 Print stylesheet for bet receipt ──────────────────────────────────── */
-@media print {
-    body > * { display: none !important; }
-    #bet-receipt { display: block !important; border: 1px solid #000 !important; padding: 2rem !important; }
-    #bet-receipt * { color: #000 !important; background: transparent !important; }
+/* ── #715 Mobile: Responsive pool cards ───────────────────────────────────── */
+@media (max-width: 480px) {
+    .glass {
+        padding: 0.75rem;
+        border-radius: 0.75rem;
+    }
+
+    .glass p {
+        font-size: 0.8125rem;
+    }
+}
+
+/* ── #715 Mobile: Prevent horizontal scroll ───────────────────────────────── */
+html,
+body {
+    max-width: 100vw;
+    overflow-x: hidden;
+}
+
+/* ── #715 Mobile: Touch-optimized form inputs ─────────────────────────────── */
+@media (max-width: 768px) {
+    input[type="number"],
+    input[type="text"],
+    select,
+    textarea {
+        font-size: 1rem;
+    }
 }
