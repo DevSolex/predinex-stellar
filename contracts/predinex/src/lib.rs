@@ -14,6 +14,22 @@ pub enum DataKey {
     TreasuryRecipient,
     DelegatedSettler(u32),
     FreezeAdmin,
+    /// Oracle address and grace period for a pool.
+    OracleConfig(u32),
+    /// Outcome submitted by the registered oracle for a pool.
+    OracleOutcome(u32),
+}
+
+/// Oracle configuration stored per pool.
+#[derive(Clone)]
+#[contracttype]
+pub struct OracleConfig {
+    /// Address authorised to submit the settlement outcome.
+    pub oracle: Address,
+    /// Seconds after `expiry` before anyone may trigger auto-settlement.
+    /// Within the grace period only the oracle, creator, or delegated settler
+    /// can settle the pool.
+    pub grace_period: u64,
 }
 
 /// Explicit lifecycle status for a prediction pool.
@@ -135,7 +151,7 @@ impl PredinexContract {
         let mut i = start;
         while i < end {
             let b = buf[i];
-            let lower = if b >= b'A' && b <= b'Z' { b + 32 } else { b };
+            let lower = if b.is_ascii_uppercase() { b + 32 } else { b };
             result.push_back(lower);
             i += 1;
         }
@@ -186,8 +202,10 @@ impl PredinexContract {
             .persistent()
             .set(&DataKey::PoolCounter, &(pool_id + 1));
 
-        env.events()
-            .publish((Symbol::new(&env, "create_pool"), pool_id), (creator, Symbol::new(&env, "Open")));
+        env.events().publish(
+            (Symbol::new(&env, "create_pool"), pool_id),
+            (creator, Symbol::new(&env, "Open")),
+        );
 
         pool_id
     }
@@ -542,10 +560,8 @@ impl PredinexContract {
             .persistent()
             .set(&DataKey::FreezeAdmin, &freeze_admin);
 
-        env.events().publish(
-            (Symbol::new(&env, "freeze_admin_set"),),
-            freeze_admin,
-        );
+        env.events()
+            .publish((Symbol::new(&env, "freeze_admin_set"),), freeze_admin);
     }
 
     /// Freeze a pool, blocking new bets and claim payouts.
@@ -636,6 +652,163 @@ impl PredinexContract {
 
         env.events()
             .publish((Symbol::new(&env, "pool_unfrozen"), pool_id), caller);
+    }
+
+    /// Register an oracle and grace period for a pool.
+    /// Only the pool creator can call this.
+    ///
+    /// # Arguments
+    /// * `oracle`        – Address authorised to submit the settlement outcome.
+    /// * `grace_period`  – Seconds after pool expiry before *anyone* may
+    ///                     trigger auto-settlement (0 = immediately after expiry).
+    pub fn register_oracle(
+        env: Env,
+        creator: Address,
+        pool_id: u32,
+        oracle: Address,
+        grace_period: u64,
+    ) {
+        creator.require_auth();
+
+        let pool = env
+            .storage()
+            .persistent()
+            .get::<_, Pool>(&DataKey::Pool(pool_id))
+            .expect("Pool not found");
+
+        if creator != pool.creator {
+            panic!("Unauthorized");
+        }
+
+        env.storage().persistent().set(
+            &DataKey::OracleConfig(pool_id),
+            &OracleConfig {
+                oracle: oracle.clone(),
+                grace_period,
+            },
+        );
+
+        env.events().publish(
+            (Symbol::new(&env, "oracle_registered"), pool_id),
+            (creator, oracle, grace_period),
+        );
+    }
+
+    /// Get the oracle config for a pool, if one has been registered.
+    pub fn get_oracle_config(env: Env, pool_id: u32) -> Option<OracleConfig> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::OracleConfig(pool_id))
+    }
+
+    /// Oracle submits the settlement outcome for a pool.
+    /// Must be called by the registered oracle address.
+    /// The outcome is stored but does not immediately settle the pool;
+    /// call `auto_settle_pool` to apply it.
+    pub fn submit_oracle_outcome(env: Env, oracle: Address, pool_id: u32, outcome: u32) {
+        oracle.require_auth();
+
+        let config: OracleConfig = env
+            .storage()
+            .persistent()
+            .get(&DataKey::OracleConfig(pool_id))
+            .expect("No oracle registered for pool");
+
+        if oracle != config.oracle {
+            panic!("Unauthorized: caller is not the registered oracle");
+        }
+
+        if outcome > 1 {
+            panic!("Invalid outcome");
+        }
+
+        let pool = env
+            .storage()
+            .persistent()
+            .get::<_, Pool>(&DataKey::Pool(pool_id))
+            .expect("Pool not found");
+
+        if pool.status != PoolStatus::Open {
+            panic!("Pool is not open");
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::OracleOutcome(pool_id), &outcome);
+
+        env.events().publish(
+            (Symbol::new(&env, "oracle_outcome_submitted"), pool_id),
+            (oracle, outcome),
+        );
+    }
+
+    /// Trigger automated settlement for an expired pool using the oracle outcome.
+    ///
+    /// Conditions:
+    /// - Pool must have expired (`now >= expiry`).
+    /// - An oracle outcome must have been submitted via `submit_oracle_outcome`.
+    /// - Within the grace period (`now < expiry + grace_period`) only the oracle,
+    ///   pool creator, or delegated settler may call this.
+    /// - After the grace period anyone may call this (permissionless).
+    pub fn auto_settle_pool(env: Env, caller: Address, pool_id: u32) {
+        caller.require_auth();
+
+        let mut pool = env
+            .storage()
+            .persistent()
+            .get::<_, Pool>(&DataKey::Pool(pool_id))
+            .expect("Pool not found");
+
+        if pool.status != PoolStatus::Open {
+            panic!("Pool is not open");
+        }
+
+        let now = env.ledger().timestamp();
+
+        if now < pool.expiry {
+            panic!("Pool has not expired yet");
+        }
+
+        let config: OracleConfig = env
+            .storage()
+            .persistent()
+            .get(&DataKey::OracleConfig(pool_id))
+            .expect("No oracle registered; use settle_pool for manual settlement");
+
+        // Within the grace period, restrict callers to oracle / creator / delegated settler
+        if now < pool.expiry + config.grace_period {
+            let delegated_settler: Option<Address> = env
+                .storage()
+                .persistent()
+                .get(&DataKey::DelegatedSettler(pool_id));
+
+            let is_privileged = caller == config.oracle
+                || caller == pool.creator
+                || delegated_settler.map(|s| s == caller).unwrap_or(false);
+
+            if !is_privileged {
+                panic!("Grace period active; only oracle, creator, or delegated settler may settle now");
+            }
+        }
+
+        let winning_outcome: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::OracleOutcome(pool_id))
+            .expect("Oracle outcome not yet submitted; falling back to manual settlement");
+
+        pool.status = PoolStatus::Settled(winning_outcome);
+        pool.settled = true;
+        pool.winning_outcome = Some(winning_outcome);
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Pool(pool_id), &pool);
+
+        env.events().publish(
+            (Symbol::new(&env, "auto_settled"), pool_id),
+            (caller, winning_outcome),
+        );
     }
 
     pub fn get_pool(env: Env, pool_id: u32) -> Option<Pool> {

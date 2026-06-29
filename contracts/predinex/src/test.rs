@@ -798,7 +798,11 @@ fn b5_settle_pool_winning_outcome_0_is_valid() {
     t.client.settle_pool(&t.admin, &pool_id, &0u32);
 
     let pool = t.client.get_pool(&pool_id).expect("pool must exist");
-    assert_eq!(pool.status, PoolStatus::Settled(0), "status must be Settled(0)");
+    assert_eq!(
+        pool.status,
+        PoolStatus::Settled(0),
+        "status must be Settled(0)"
+    );
 }
 
 /// B6: winning_outcome == 1 settles correctly (boundary — highest valid).
@@ -812,7 +816,11 @@ fn b6_settle_pool_winning_outcome_1_is_valid() {
     t.client.settle_pool(&t.admin, &pool_id, &1u32);
 
     let pool = t.client.get_pool(&pool_id).expect("pool must exist");
-    assert_eq!(pool.status, PoolStatus::Settled(1), "status must be Settled(1)");
+    assert_eq!(
+        pool.status,
+        PoolStatus::Settled(1),
+        "status must be Settled(1)"
+    );
 }
 
 // ============================================================================
@@ -1279,7 +1287,9 @@ fn g1_treasury_recipient_can_be_rotated() {
     client.initialize(&token_id.address(), &original_recipient);
 
     // Verify original recipient is set
-    let current = client.get_treasury_recipient().expect("recipient must be set");
+    let current = client
+        .get_treasury_recipient()
+        .expect("recipient must be set");
     assert_eq!(current, original_recipient);
 
     // Rotate to new recipient
@@ -1287,7 +1297,9 @@ fn g1_treasury_recipient_can_be_rotated() {
     client.rotate_treasury_recipient(&original_recipient, &new_recipient);
 
     // Verify new recipient is now set
-    let updated = client.get_treasury_recipient().expect("recipient must be set");
+    let updated = client
+        .get_treasury_recipient()
+        .expect("recipient must be set");
     assert_eq!(updated, new_recipient);
 }
 
@@ -1369,7 +1381,10 @@ fn g3_after_rotation_only_new_recipient_can_withdraw() {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         client.withdraw_treasury(&original_recipient, &treasury_balance);
     }));
-    assert!(result.is_err(), "old recipient should not be able to withdraw");
+    assert!(
+        result.is_err(),
+        "old recipient should not be able to withdraw"
+    );
 
     // New recipient should be able to withdraw
     client.withdraw_treasury(&new_recipient, &treasury_balance);
@@ -1399,7 +1414,9 @@ fn g4_rotation_emits_event_with_old_and_new_addresses() {
 
     // Event verification would be done through event inspection in production
     // For this test, we verify the state change occurred
-    let updated = client.get_treasury_recipient().expect("recipient must be set");
+    let updated = client
+        .get_treasury_recipient()
+        .expect("recipient must be set");
     assert_eq!(updated, new_recipient);
 }
 
@@ -1425,14 +1442,18 @@ fn g5_multiple_rotations_work_correctly() {
     client.rotate_treasury_recipient(&recipient2, &recipient3);
 
     // Verify final recipient is set
-    let final_recipient = client.get_treasury_recipient().expect("recipient must be set");
+    let final_recipient = client
+        .get_treasury_recipient()
+        .expect("recipient must be set");
     assert_eq!(final_recipient, recipient3);
 
     // Verify only final recipient can rotate
     let recipient4 = Address::generate(&env);
     client.rotate_treasury_recipient(&recipient3, &recipient4);
 
-    let updated = client.get_treasury_recipient().expect("recipient must be set");
+    let updated = client
+        .get_treasury_recipient()
+        .expect("recipient must be set");
     assert_eq!(updated, recipient4);
 }
 
@@ -1648,4 +1669,184 @@ fn h5_withdrawal_event_includes_caller_and_recipient() {
     // Verify withdrawal succeeded with correct recipient
     assert_eq!(token.balance(&treasury_recipient), treasury_balance);
     assert_eq!(client.get_treasury_balance(), 0);
+}
+
+// ============================================================================
+// Issue #707: Automated pool settlement on expiry with oracle integration
+// ============================================================================
+
+fn setup_oracle_env() -> (
+    Env,
+    soroban_sdk::Address, // contract_id
+    PredinexContractClient<'static>,
+    soroban_sdk::Address, // creator
+    soroban_sdk::Address, // oracle
+    u32,                  // pool_id
+) {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PredinexContract, ());
+    let client = PredinexContractClient::new(&env, &contract_id);
+
+    let token_admin = Address::generate(&env);
+    let token_id = env.register_stellar_asset_contract_v2(token_admin.clone());
+    client.initialize(&token_id.address(), &token_admin);
+
+    let creator = Address::generate(&env);
+    let oracle = Address::generate(&env);
+
+    let pool_id = client.create_pool(
+        &creator,
+        &String::from_str(&env, "Market"),
+        &String::from_str(&env, "Desc"),
+        &String::from_str(&env, "Yes"),
+        &String::from_str(&env, "No"),
+        &3600,
+    );
+
+    (env, contract_id, client, creator, oracle, pool_id)
+}
+
+/// I1: register_oracle stores config and only creator may call it.
+#[test]
+fn i1_register_oracle_stores_config() {
+    let (env, _contract_id, client, creator, oracle, pool_id) = setup_oracle_env();
+
+    client.register_oracle(&creator, &pool_id, &oracle, &300);
+
+    let config = client.get_oracle_config(&pool_id).expect("config not set");
+    assert_eq!(config.oracle, oracle);
+    assert_eq!(config.grace_period, 300);
+}
+
+/// I2: Only the pool creator can register an oracle.
+#[test]
+#[should_panic(expected = "Unauthorized")]
+fn i2_non_creator_cannot_register_oracle() {
+    let (_env, _contract_id, client, _creator, oracle, pool_id) = setup_oracle_env();
+    let stranger = Address::generate(&_env);
+    client.register_oracle(&stranger, &pool_id, &oracle, &300);
+}
+
+/// I3: Oracle can submit an outcome after expiry.
+#[test]
+fn i3_oracle_can_submit_outcome() {
+    let (env, _contract_id, client, creator, oracle, pool_id) = setup_oracle_env();
+    client.register_oracle(&creator, &pool_id, &oracle, &300);
+
+    env.ledger().with_mut(|li| li.timestamp = 3601);
+    client.submit_oracle_outcome(&oracle, &pool_id, &1);
+    // No panic = success; outcome is stored.
+}
+
+/// I4: Only the registered oracle may submit an outcome.
+#[test]
+#[should_panic(expected = "Unauthorized: caller is not the registered oracle")]
+fn i4_non_oracle_cannot_submit_outcome() {
+    let (env, _contract_id, client, creator, oracle, pool_id) = setup_oracle_env();
+    client.register_oracle(&creator, &pool_id, &oracle, &300);
+
+    let stranger = Address::generate(&env);
+    env.ledger().with_mut(|li| li.timestamp = 3601);
+    client.submit_oracle_outcome(&stranger, &pool_id, &0);
+}
+
+/// I5: Oracle auto-settlement succeeds after expiry + grace period (permissionless).
+#[test]
+fn i5_auto_settle_after_grace_period_succeeds() {
+    let (env, _contract_id, client, creator, oracle, pool_id) = setup_oracle_env();
+    client.register_oracle(&creator, &pool_id, &oracle, &300);
+
+    env.ledger().with_mut(|li| li.timestamp = 3601);
+    client.submit_oracle_outcome(&oracle, &pool_id, &0);
+
+    // Advance past grace period (expiry=3600, grace=300 → open after 3900)
+    env.ledger().with_mut(|li| li.timestamp = 3901);
+    let anyone = Address::generate(&env);
+    client.auto_settle_pool(&anyone, &pool_id);
+
+    let pool = client.get_pool(&pool_id).unwrap();
+    assert_eq!(pool.status, PoolStatus::Settled(0));
+    assert_eq!(pool.winning_outcome, Some(0));
+    assert!(pool.settled);
+}
+
+/// I6: Within the grace period only oracle/creator/settler may auto-settle.
+#[test]
+#[should_panic(expected = "Grace period active")]
+fn i6_auto_settle_within_grace_period_blocked_for_strangers() {
+    let (env, _contract_id, client, creator, oracle, pool_id) = setup_oracle_env();
+    client.register_oracle(&creator, &pool_id, &oracle, &300);
+
+    // Past expiry but within grace period
+    env.ledger().with_mut(|li| li.timestamp = 3700);
+    client.submit_oracle_outcome(&oracle, &pool_id, &1);
+
+    let stranger = Address::generate(&env);
+    client.auto_settle_pool(&stranger, &pool_id);
+}
+
+/// I7: Oracle may auto-settle within the grace period.
+#[test]
+fn i7_oracle_can_auto_settle_within_grace_period() {
+    let (env, _contract_id, client, creator, oracle, pool_id) = setup_oracle_env();
+    client.register_oracle(&creator, &pool_id, &oracle, &300);
+
+    env.ledger().with_mut(|li| li.timestamp = 3700); // within grace (3600..3900)
+    client.submit_oracle_outcome(&oracle, &pool_id, &1);
+    client.auto_settle_pool(&oracle, &pool_id);
+
+    let pool = client.get_pool(&pool_id).unwrap();
+    assert_eq!(pool.status, PoolStatus::Settled(1));
+}
+
+/// I8: auto_settle_pool panics if pool has not expired yet.
+#[test]
+#[should_panic(expected = "Pool has not expired yet")]
+fn i8_auto_settle_before_expiry_rejected() {
+    let (env, _contract_id, client, creator, oracle, pool_id) = setup_oracle_env();
+    client.register_oracle(&creator, &pool_id, &oracle, &0);
+
+    env.ledger().with_mut(|li| li.timestamp = 100); // before expiry=3600
+    client.auto_settle_pool(&oracle, &pool_id);
+}
+
+/// I9: auto_settle_pool panics if oracle outcome not yet submitted.
+#[test]
+#[should_panic(expected = "Oracle outcome not yet submitted")]
+fn i9_auto_settle_without_oracle_outcome_panics() {
+    let (env, _contract_id, client, creator, oracle, pool_id) = setup_oracle_env();
+    client.register_oracle(&creator, &pool_id, &oracle, &0);
+
+    env.ledger().with_mut(|li| li.timestamp = 3601);
+    // outcome never submitted
+    client.auto_settle_pool(&oracle, &pool_id);
+}
+
+/// I10: auto_settle_pool panics if no oracle registered (fallback to manual).
+#[test]
+#[should_panic(expected = "No oracle registered")]
+fn i10_auto_settle_without_oracle_config_panics() {
+    let (env, _contract_id, client, _creator, oracle, pool_id) = setup_oracle_env();
+    // oracle never registered
+    env.ledger().with_mut(|li| li.timestamp = 3601);
+    client.auto_settle_pool(&oracle, &pool_id);
+}
+
+/// I11: Delegated settler can auto-settle within the grace period.
+#[test]
+fn i11_delegated_settler_can_auto_settle_within_grace_period() {
+    let (env, _contract_id, client, creator, oracle, pool_id) = setup_oracle_env();
+    let settler = Address::generate(&env);
+
+    client.register_oracle(&creator, &pool_id, &oracle, &300);
+    client.assign_settler(&creator, &pool_id, &settler);
+
+    env.ledger().with_mut(|li| li.timestamp = 3700); // within grace
+    client.submit_oracle_outcome(&oracle, &pool_id, &0);
+    client.auto_settle_pool(&settler, &pool_id);
+
+    let pool = client.get_pool(&pool_id).unwrap();
+    assert_eq!(pool.status, PoolStatus::Settled(0));
 }
