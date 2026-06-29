@@ -22,6 +22,7 @@ mod fuzz_tests;
 mod multi_asset_tests;
 mod multi_user_tests;
 mod pause_tests;
+mod pool_categories_tests;
 mod protocol_fee_tests;
 mod test;
 mod validation_hardening_tests;
@@ -212,6 +213,10 @@ pub enum DataKey {
     /// #625 — Pending rescue request waiting out the 24-hour timelock.
     /// Value: (token: Address, to: Address, amount: i128, not_before: u64)
     PendingRescue,
+    /// #718 — Category assigned to a pool for discovery grouping.
+    PoolCategory(u32),
+    /// #718 — Discovery tags assigned to a pool (Vec<String>).
+    PoolTags(u32),
 }
 
 // #189 — TTL bump policy for persistent storage entries.
@@ -456,6 +461,28 @@ pub enum PoolStatus {
     Cancelled,
     /// #355 — Pool parameters are stored but betting opens at this timestamp.
     Scheduled(u64),
+}
+
+/// #718 — Category for grouping prediction pools by topic for discovery.
+#[derive(Clone, PartialEq, Debug)]
+#[contracttype]
+pub enum PoolCategory {
+    /// General / uncategorised pool.
+    General,
+    /// Sports and athletics markets.
+    Sports,
+    /// Cryptocurrency and DeFi markets.
+    Crypto,
+    /// Politics and governance markets.
+    Politics,
+    /// Entertainment and pop-culture markets.
+    Entertainment,
+    /// Science and technology markets.
+    Science,
+    /// Financial markets (stocks, commodities, FX).
+    Finance,
+    /// Custom / other category.
+    Other,
 }
 
 #[derive(Clone)]
@@ -7059,5 +7086,125 @@ impl PredinexContract {
         }
 
         Ok(())
+    }
+
+    // ── #718 Pool Categories and Discovery Tags ───────────────────────────────
+
+    /// Maximum number of discovery tags per pool.
+    const MAX_POOL_TAGS: u32 = 10;
+    /// Maximum byte length for a single tag string.
+    const MAX_TAG_LENGTH: u32 = 32;
+
+    /// #718 — Assign a category to a pool for topic-based discovery.
+    ///
+    /// Only the pool creator or admin may call this. The pool must exist.
+    /// Emits a `set_pool_category` event.
+    pub fn set_pool_category(
+        env: Env,
+        caller: Address,
+        pool_id: u32,
+        category: PoolCategory,
+    ) -> Result<(), ContractError> {
+        caller.require_auth();
+        let pool = env
+            .storage()
+            .persistent()
+            .get::<_, Pool>(&DataKey::Pool(pool_id))
+            .ok_or(ContractError::PoolNotFound)?;
+        // Only admin or pool creator may set category.
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(ContractError::NotInitialized)?;
+        if caller != pool.creator && caller != admin {
+            return Err(ContractError::Unauthorized);
+        }
+        env.storage()
+            .persistent()
+            .set(&DataKey::PoolCategory(pool_id), &category);
+        env.storage().persistent().extend_ttl(
+            &DataKey::PoolCategory(pool_id),
+            POOL_BUMP_THRESHOLD,
+            POOL_BUMP_TARGET,
+        );
+        env.events().publish(
+            (
+                Symbol::new(&env, "set_pool_category"),
+                event_version(&env),
+                pool_id,
+            ),
+            (),
+        );
+        Ok(())
+    }
+
+    /// #718 — Set discovery tags for a pool.
+    ///
+    /// Only the pool creator or admin may call this. The pool must exist.
+    /// `tags` must contain at most `MAX_POOL_TAGS` entries, each at most
+    /// `MAX_TAG_LENGTH` bytes. Passing an empty vec clears all tags.
+    /// Emits a `set_pool_tags` event.
+    pub fn set_pool_tags(
+        env: Env,
+        caller: Address,
+        pool_id: u32,
+        tags: Vec<String>,
+    ) -> Result<(), ContractError> {
+        caller.require_auth();
+        let pool = env
+            .storage()
+            .persistent()
+            .get::<_, Pool>(&DataKey::Pool(pool_id))
+            .ok_or(ContractError::PoolNotFound)?;
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(ContractError::NotInitialized)?;
+        if caller != pool.creator && caller != admin {
+            return Err(ContractError::Unauthorized);
+        }
+        if tags.len() > Self::MAX_POOL_TAGS {
+            return Err(ContractError::TooManyOutcomes); // reuse nearest semantic error
+        }
+        for i in 0..tags.len() {
+            let tag = tags.get(i).unwrap();
+            if tag.len() > Self::MAX_TAG_LENGTH {
+                return Err(ContractError::OutcomeTooLong); // reuse nearest semantic error
+            }
+        }
+        env.storage()
+            .persistent()
+            .set(&DataKey::PoolTags(pool_id), &tags);
+        env.storage().persistent().extend_ttl(
+            &DataKey::PoolTags(pool_id),
+            POOL_BUMP_THRESHOLD,
+            POOL_BUMP_TARGET,
+        );
+        env.events().publish(
+            (
+                Symbol::new(&env, "set_pool_tags"),
+                event_version(&env),
+                pool_id,
+            ),
+            (),
+        );
+        Ok(())
+    }
+
+    /// #718 — Return the category assigned to a pool, or `None` if not set.
+    pub fn get_pool_category(env: Env, pool_id: u32) -> Option<PoolCategory> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PoolCategory(pool_id))
+    }
+
+    /// #718 — Return the discovery tags for a pool, or an empty vec if none set.
+    pub fn get_pool_tags(env: Env, pool_id: u32) -> Vec<String> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PoolTags(pool_id))
+            .unwrap_or_else(|| Vec::new(&env))
     }
 }
