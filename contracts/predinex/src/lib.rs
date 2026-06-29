@@ -19,6 +19,7 @@ mod e2e_tests;
 mod fee_config_tests;
 mod fuzz;
 mod fuzz_tests;
+mod integration_tests;
 mod multi_asset_tests;
 mod multi_user_tests;
 mod pause_tests;
@@ -1068,6 +1069,20 @@ pub struct PredinexContract;
 #[allow(clippy::too_many_arguments)]
 #[contractimpl]
 impl PredinexContract {
+    /// Initialize the contract. Must be called exactly once before any pool
+    /// can be created or any bet placed.
+    ///
+    /// Sets the bet/settlement token, the treasury recipient (which also acts
+    /// as the protocol admin for fee/limit configuration), zeroes the treasury
+    /// ledger, and records the contract state schema version.
+    ///
+    /// # Arguments
+    /// * `token` – address of the token used for all bets, payouts, and refunds.
+    /// * `treasury_recipient` – address that receives protocol fees and is
+    ///   authorized to perform admin actions (fees, limits, pausing, etc.).
+    ///
+    /// # Errors
+    /// * `AlreadyInitialized` – the contract has already been initialized.
     pub fn initialize(
         env: Env,
         token: Address,
@@ -2610,6 +2625,42 @@ impl PredinexContract {
         Ok(pool_id)
     }
 
+    /// Create a binary (two-outcome) prediction pool that opens immediately.
+    ///
+    /// The pool starts in `Open` status with `created_at` set to the current
+    /// ledger timestamp and `expiry = created_at + duration`. If a non-zero
+    /// creation fee is configured, it is transferred from `creator` to the
+    /// treasury recipient as part of this call.
+    ///
+    /// # Arguments
+    /// * `creator` – pool creator; must authorize the call and pay any creation fee.
+    /// * `title` – market question; must be non-empty (non-whitespace) and at
+    ///   most `MAX_TITLE_LENGTH` bytes.
+    /// * `description` – resolution details; non-empty and at most
+    ///   `MAX_DESCRIPTION_LENGTH` bytes.
+    /// * `outcome_a` / `outcome_b` – the two outcome labels; each must be
+    ///   non-empty, within length bounds, and distinct from the other.
+    /// * `duration` – pool lifetime in seconds; must be within
+    ///   `[MIN_POOL_DURATION_SECS, MAX_POOL_DURATION_SECS]`.
+    /// * `amount` – creator's committed deposit; must be at least
+    ///   `MIN_CREATOR_DEPOSIT`. Enforced as an anti-spam floor on pool creation.
+    ///
+    /// # Returns
+    /// The newly assigned `pool_id` (monotonically increasing from 1).
+    ///
+    /// # Errors
+    /// * `NotInitialized` – the contract has not been initialized.
+    /// * `InsufficientCreatorDeposit` – `amount < MIN_CREATOR_DEPOSIT`.
+    /// * `TitleEmpty` / `TitleTooLong` / `DescriptionEmpty` / `DescriptionTooLong`
+    ///   / `StringWhitespaceOnly` – title/description fail validation.
+    /// * `InvalidOutcome` / `OutcomeEmpty` / `OutcomeTooLong` /
+    ///   `DuplicateOutcomeLabels` – outcome labels fail validation.
+    /// * `DurationTooShort` / `DurationTooLong` – duration is out of bounds.
+    /// * `ExpiryOverflow` / `PoolTotalOverflow` – arithmetic overflow.
+    ///
+    /// # Events
+    /// Emits a `create_pool` event carrying the creator, expiry, title, and
+    /// both outcome names.
     pub fn create_pool(
         env: Env,
         creator: Address,
@@ -2678,6 +2729,35 @@ impl PredinexContract {
         )
     }
 
+    /// Create a multi-outcome prediction pool (two or more outcomes) that opens
+    /// immediately, with optional off-chain metadata.
+    ///
+    /// Behaves like [`create_pool`](Self::create_pool) but accepts an arbitrary
+    /// `outcomes` vector and an optional `metadata_uri`. The same validation,
+    /// creation-fee charge, and `create_pool` event apply.
+    ///
+    /// # Arguments
+    /// * `creator` – pool creator; must authorize the call and pay any creation fee.
+    /// * `title` / `description` – validated as in [`create_pool`](Self::create_pool).
+    /// * `outcomes` – list of outcome labels; the count must be within
+    ///   `[MIN_OUTCOME_COUNT, MAX_OUTCOME_COUNT]` and each label must be
+    ///   non-empty, length-bounded, and distinct (case-insensitive).
+    /// * `duration` – pool lifetime in seconds; within
+    ///   `[MIN_POOL_DURATION_SECS, MAX_POOL_DURATION_SECS]`.
+    /// * `metadata_uri` – optional off-chain metadata URI; when present it must
+    ///   be at most `MAX_METADATA_URI_LENGTH` bytes and use an `https://`,
+    ///   `ipfs://`, or `ar://` scheme.
+    ///
+    /// # Returns
+    /// The newly assigned `pool_id`.
+    ///
+    /// # Errors
+    /// Same error set as [`create_pool`](Self::create_pool). An invalid
+    /// `metadata_uri` surfaces as `InvalidOutcome` (bad scheme) or
+    /// `DescriptionTooLong` (too long).
+    ///
+    /// # Events
+    /// Emits a `create_pool` event.
     pub fn create_multi_outcome_pool(
         env: Env,
         creator: Address,
@@ -2729,6 +2809,31 @@ impl PredinexContract {
         )
     }
 
+    /// Create a binary pool that stays in `Scheduled` status until `open_at`.
+    ///
+    /// The pool is created up front (so its `pool_id` is reserved and any
+    /// creation fee is charged immediately) but cannot accept bets until it is
+    /// activated via [`activate_scheduled_pool`](Self::activate_scheduled_pool)
+    /// at or after `open_at`. The pool's `expiry` is `open_at + duration`.
+    ///
+    /// # Arguments
+    /// * `creator` – pool creator; must authorize the call and pay any creation fee.
+    /// * `title` / `description` / `outcome_a` / `outcome_b` / `duration` –
+    ///   validated as in [`create_pool`](Self::create_pool).
+    /// * `open_at` – future timestamp when the pool becomes activatable; must be
+    ///   strictly after now and within `MAX_SCHEDULE_POOL_HORIZON_SECS`.
+    ///
+    /// # Returns
+    /// The newly assigned `pool_id`.
+    ///
+    /// # Errors
+    /// * `DurationTooShort` – `open_at` is not in the future.
+    /// * `DurationTooLong` – `open_at` is beyond the scheduling horizon.
+    /// * `ExpiryOverflow` – timestamp arithmetic overflow.
+    /// * Plus the validation errors of [`create_pool`](Self::create_pool).
+    ///
+    /// # Events
+    /// Emits a `pool_scheduled` event with the creator and `open_at`.
     pub fn schedule_pool(
         env: Env,
         creator: Address,
@@ -2791,6 +2896,22 @@ impl PredinexContract {
         Ok(pool_id)
     }
 
+    /// Activate a scheduled pool once its `open_at` time has been reached,
+    /// transitioning it from `Scheduled` to `Open` so bets can be placed.
+    ///
+    /// Permissionless: anyone may call this once the pool is due, which lets a
+    /// keeper or the first bettor flip the pool open.
+    ///
+    /// # Arguments
+    /// * `pool_id` – the scheduled pool to activate.
+    ///
+    /// # Errors
+    /// * `PoolNotFound` – pool does not exist.
+    /// * `PoolNotOpen` – pool is not in `Scheduled` status.
+    /// * `PoolNotExpired` – the current time is still before `open_at`.
+    ///
+    /// # Events
+    /// Emits a `scheduled_pool_activated` event with the `open_at` time.
     pub fn activate_scheduled_pool(env: Env, pool_id: u32) -> Result<(), ContractError> {
         let mut pool = env
             .storage()
@@ -2828,6 +2949,23 @@ impl PredinexContract {
         Ok(())
     }
 
+    /// Cancel a pool that is still in `Scheduled` status before it opens.
+    ///
+    /// Only the creator may cancel. The pool transitions to the terminal
+    /// `Cancelled` status and its scheduling record is removed. Since no bets
+    /// can exist on a scheduled pool, no refunds are involved.
+    ///
+    /// # Arguments
+    /// * `creator` – must authorize the call and be the pool creator.
+    /// * `pool_id` – the scheduled pool to cancel.
+    ///
+    /// # Errors
+    /// * `PoolNotFound` – pool does not exist.
+    /// * `Unauthorized` – caller is not the creator.
+    /// * `PoolNotOpen` – pool is not in `Scheduled` status.
+    ///
+    /// # Events
+    /// Emits a `scheduled_pool_cancelled` event with the creator.
     pub fn cancel_scheduled_pool(
         env: Env,
         creator: Address,
@@ -2868,6 +3006,16 @@ impl PredinexContract {
         Ok(())
     }
 
+    /// Return scheduling records for pools whose IDs fall in
+    /// `[start_id, start_id + count)`, skipping any that are not (or no longer)
+    /// scheduled. Read-only.
+    ///
+    /// # Arguments
+    /// * `start_id` – first pool ID to inspect.
+    /// * `count` – number of IDs to scan; capped at 100 per call.
+    ///
+    /// # Returns
+    /// A `Vec<ScheduledPool>` of matching records (may be shorter than `count`).
     pub fn get_scheduled_pools(env: Env, start_id: u32, count: u32) -> Vec<ScheduledPool> {
         let mut scheduled = Vec::new(&env);
         let pool_count = Self::get_pool_count(env.clone());
@@ -2894,6 +3042,39 @@ impl PredinexContract {
         scheduled
     }
 
+    /// Place a bet of `amount` tokens on `outcome` in an open pool.
+    ///
+    /// Transfers `amount` from `user` into the contract, records/updates the
+    /// user's position and the pool's per-outcome totals, increments the
+    /// participant count on the user's first bet, and applies per-wallet rate
+    /// limiting and per-pool bet limits when configured. A user may bet on the
+    /// same or multiple outcomes across calls; stakes accumulate.
+    ///
+    /// # Arguments
+    /// * `user` – bettor; must authorize the call and hold sufficient token balance.
+    /// * `pool_id` – target pool; must exist and be `Open` and not yet expired.
+    /// * `outcome` – zero-based outcome index; must be `< outcome count`.
+    /// * `amount` – stake in token base units; must be `> 0` and within the
+    ///   pool's `[min_bet, max_bet]` limits when set.
+    /// * `referrer` – optional referrer address recorded for the bet (no effect
+    ///   on payout math).
+    ///
+    /// # Errors
+    /// * `ContractPaused` – the contract is globally paused.
+    /// * `InvalidBetAmount` – `amount <= 0`.
+    /// * `PoolNotFound` – pool does not exist.
+    /// * `PoolIsFrozen` – pool is frozen and still within its cooling period.
+    /// * `PoolNotOpen` – pool is not in `Open` status.
+    /// * `PoolExpired` – the pool's expiry timestamp has passed.
+    /// * `InvalidOutcome` – `outcome` is out of range.
+    /// * `RateLimitExceeded` – the per-wallet rate limit was hit.
+    /// * `BetBelowMinBet` / `BetAboveMaxBet` – amount violates pool bet limits.
+    /// * `PoolTotalOverflow` / `UserBetOverflow` – stake accumulation overflow.
+    /// * `PoolSizeLimitExceeded` – the bet would push the pool past `MaxPoolSize`.
+    ///
+    /// # Events
+    /// Emits a `place_bet` event with the bettor, outcome, and amount; a
+    /// `referral_bet` event is also emitted when a `referrer` is supplied.
     pub fn place_bet(
         env: Env,
         user: Address,
@@ -4083,120 +4264,32 @@ impl PredinexContract {
         Ok(())
     }
 
-    pub fn settle_expired_pool(
-        env: Env,
-        caller: Address,
-        pool_id: u32,
-    ) -> Result<(), ContractError> {
-        if !Self::is_initialized(&env) {
-            panic_with_error!(&env, ContractError::NotInitialized);
-        }
-        caller.require_auth();
-        Self::require_not_paused(&env)?;
-
-        let mut pool = env
-            .storage()
-            .persistent()
-            .get::<_, Pool>(&DataKey::Pool(pool_id))
-            .ok_or(ContractError::PoolNotFound)?;
-
-        if pool.status != PoolStatus::Open {
-            return Err(ContractError::PoolAlreadySettled);
-        }
-
-        if env.ledger().timestamp() <= pool.expiry {
-            return Err(ContractError::PoolNotExpired);
-        }
-
-        let min_participants = Self::get_min_settlement_participants(env.clone());
-        if pool.participant_count < min_participants {
-            return Err(ContractError::InsufficientParticipants);
-        }
-
-        let totals = Self::read_outcome_totals(&env, pool_id, &pool);
-        let mut winning_outcome = 0;
-        let mut max_total = -1;
-        for i in 0..totals.len() {
-            let total = totals.get(i).unwrap();
-            if total > max_total {
-                max_total = total;
-                winning_outcome = i;
-            }
-        }
-
-        let outcomes = Self::read_outcomes(&env, pool_id, &pool);
-        if winning_outcome >= outcomes.len() {
-            return Err(ContractError::InvalidOutcome);
-        }
-
-        pool.status = PoolStatus::Settled(winning_outcome);
-        pool.settled = true;
-        pool.winning_outcome = Some(winning_outcome);
-
-        let winning_side_total = totals.get(winning_outcome).unwrap();
-        let total_pool_volume = Self::sum_totals(&totals)?;
-        let fee_bps = Self::resolve_fee_bps_for_volume(&env, total_pool_volume);
-        let fee_amount = total_pool_volume
-            .checked_mul(fee_bps as i128)
-            .ok_or(ContractError::PoolTotalOverflow)?
-            / 10000;
-
-        if env.storage().persistent().has(&DataKey::VolumeFeeTiers) {
-            env.storage()
-                .persistent()
-                .set(&DataKey::PoolFeeBps(pool_id), &fee_bps);
-            env.storage().persistent().extend_ttl(
-                &DataKey::PoolFeeBps(pool_id),
-                POOL_BUMP_THRESHOLD,
-                POOL_BUMP_TARGET,
-            );
-        }
-
-        env.storage()
-            .persistent()
-            .set(&DataKey::Pool(pool_id), &pool);
-        env.storage()
-            .persistent()
-            .set(&DataKey::PoolSettlementProtocolFee(pool_id), &fee_amount);
-        env.storage().persistent().extend_ttl(
-            &DataKey::PoolSettlementProtocolFee(pool_id),
-            POOL_BUMP_THRESHOLD,
-            POOL_BUMP_TARGET,
-        );
-
-        let source = SettlementSource::Expired;
-        env.storage()
-            .persistent()
-            .set(&DataKey::PoolSettlementSource(pool_id), &source);
-        env.storage().persistent().extend_ttl(
-            &DataKey::PoolSettlementSource(pool_id),
-            POOL_BUMP_THRESHOLD,
-            POOL_BUMP_TARGET,
-        );
-
-        env.storage().persistent().extend_ttl(
-            &DataKey::Pool(pool_id),
-            POOL_BUMP_THRESHOLD,
-            POOL_BUMP_TARGET,
-        );
-
-        env.events().publish(
-            (
-                Symbol::new(&env, "SettleExpired"),
-                event_version(&env),
-                pool_id,
-            ),
-            SettleExpiredEvent {
-                caller,
-                winning_outcome,
-                winning_side_total,
-                total_pool_volume,
-                fee_amount,
-            },
-        );
-        Ok(())
-    }
-
+    /// Settle an expired pool by declaring the winning outcome.
+    ///
+    /// Transitions the pool from `Open` to `Settled(winning_outcome)`, fixes the
+    /// market's protocol fee (computed as `floor(bps × total volume)`), records
+    /// the settlement source, and emits a `settle_pool` event. After settlement,
+    /// winners call [`claim_winnings`](Self::claim_winnings). The caller must be
+    /// the pool creator or a delegated settler assigned via
+    /// [`assign_settler`](Self::assign_settler).
+    ///
+    /// # Arguments
+    /// * `caller` – must authorize the call and be the creator or delegated settler.
+    /// * `pool_id` – pool to settle; must exist, be `Open`, and have expired.
+    /// * `winning_outcome` – zero-based index of the winning outcome; must be in range.
+    ///
+    /// # Errors
+    /// * `ContractPaused` – the contract is globally paused.
+    /// * `PoolNotFound` – pool does not exist.
+    /// * `Unauthorized` – caller is neither creator nor delegated settler.
+    /// * `PoolAlreadySettled` – pool is not in `Open` status.
+    /// * `PoolNotExpired` – the pool's expiry timestamp has not been reached.
+    /// * `InvalidOutcome` – `winning_outcome` is out of range.
+    /// * `PoolTotalOverflow` – overflow while summing pool totals.
+    ///
+    /// # Events
+    /// Emits a `settle_pool` event with caller, winning outcome, winning-side
+    /// total, total pool volume, fee amount, and settlement source.
     pub fn settle_pool(
         env: Env,
         caller: Address,
@@ -4802,6 +4895,32 @@ impl PredinexContract {
         Ok(winnings)
     }
 
+    /// Register a delayed winner claim to be executed at or after `claim_at`.
+    ///
+    /// Records a pending `ScheduledClaim` so a keeper can later settle the
+    /// payout on the user's behalf via
+    /// [`execute_scheduled_claims`](Self::execute_scheduled_claims). At most one
+    /// pending scheduled claim may exist per `(pool_id, user)`. This only
+    /// registers intent; eligibility (pool settled, winning side) is enforced at
+    /// execution time.
+    ///
+    /// # Arguments
+    /// * `user` – the claimant; must authorize the call.
+    /// * `pool_id` – pool to claim from; must exist and contain the user's bet.
+    /// * `claim_at` – future timestamp at which the claim becomes executable.
+    ///
+    /// # Returns
+    /// The new scheduled-claim `id`.
+    ///
+    /// # Errors
+    /// * `DurationTooShort` – `claim_at` is not in the future.
+    /// * `RateLimitExceeded` – a pending scheduled claim already exists for this
+    ///   `(pool_id, user)`.
+    /// * `PoolNotFound` – pool does not exist.
+    /// * `NoBetFound` – the user has no bet in the pool.
+    ///
+    /// # Events
+    /// Emits a `claim_scheduled` event with the new id and `claim_at`.
     pub fn schedule_claim(
         env: Env,
         user: Address,
@@ -4863,6 +4982,23 @@ impl PredinexContract {
         Ok(id)
     }
 
+    /// Cancel a pending scheduled claim previously created by `schedule_claim`.
+    ///
+    /// Only the owning user may cancel, and only while the claim is still
+    /// `Pending`. The entry is marked `Cancelled` and its per-user/pool index is
+    /// freed so a new claim can be scheduled.
+    ///
+    /// # Arguments
+    /// * `user` – owner of the scheduled claim; must authorize the call.
+    /// * `scheduled_claim_id` – id returned by
+    ///   [`schedule_claim`](Self::schedule_claim).
+    ///
+    /// # Errors
+    /// * `NoBetFound` – no such scheduled claim, or it is not owned by `user`,
+    ///   or it is not in `Pending` status.
+    ///
+    /// # Events
+    /// Emits a `scheduled_claim_cancelled` event.
     pub fn cancel_scheduled_claim(
         env: Env,
         user: Address,
@@ -4899,6 +5035,27 @@ impl PredinexContract {
         Ok(())
     }
 
+    /// Execute all due pending scheduled claims, paying out each winner.
+    ///
+    /// Permissionless keeper entry point. Scans scheduled claims in id order and,
+    /// for every `Pending` entry whose `claim_at` has passed, performs the winner
+    /// payout (same logic as [`claim_winnings`](Self::claim_winnings)), marks the
+    /// entry `Executed`, and emits a `scheduled_claim_executed` event. Processing
+    /// is capped at `SCHEDULED_CLAIM_EXECUTION_CAP` entries per call so the
+    /// transaction stays within resource limits; call repeatedly to drain a
+    /// large backlog.
+    ///
+    /// # Returns
+    /// A `Vec<ClaimAllEntry>` of the `(pool_id, amount)` payouts performed this
+    /// call (possibly empty).
+    ///
+    /// # Errors
+    /// * `PoolNotExpired` – no claim was executed but at least one pending claim
+    ///   exists that is not yet due (signals "nothing to do yet").
+    /// * Any error propagated from the underlying winner-claim logic.
+    ///
+    /// # Events
+    /// Emits a `scheduled_claim_executed` event per payout.
     pub fn execute_scheduled_claims(env: Env) -> Result<Vec<ClaimAllEntry>, ContractError> {
         let now = env.ledger().timestamp();
         let next_id = env
@@ -4949,6 +5106,15 @@ impl PredinexContract {
         Ok(results)
     }
 
+    /// Return pending scheduled claims with ids in `[start_id, start_id + count)`.
+    /// Non-pending (cancelled/executed) entries are skipped. Read-only.
+    ///
+    /// # Arguments
+    /// * `start_id` – first scheduled-claim id to inspect.
+    /// * `count` – number of ids to scan; capped at 100 per call.
+    ///
+    /// # Returns
+    /// A `Vec<ScheduledClaim>` of matching pending entries.
     pub fn get_scheduled_claims(env: Env, start_id: u32, count: u32) -> Vec<ScheduledClaim> {
         let mut claims = Vec::new(&env);
         let next_id = env
@@ -5179,10 +5345,31 @@ impl PredinexContract {
             .unwrap_or(0)
     }
 
+    /// Return the current treasury recipient / admin address, or `None` if the
+    /// contract has not been initialized. Read-only.
     pub fn get_treasury_recipient(env: Env) -> Option<Address> {
         env.storage().persistent().get(&DataKey::TreasuryRecipient)
     }
 
+    /// Configure a rate limit on treasury withdrawals. Only the treasury
+    /// recipient may call this.
+    ///
+    /// A limit of `max_withdrawal_per_window` tokens may be withdrawn per rolling
+    /// `withdrawal_window_secs` window. Pass `0`/`0` to remove the limit. Setting
+    /// a new limit resets any in-progress withdrawal window.
+    ///
+    /// # Arguments
+    /// * `caller` – must authorize the call and be the treasury recipient.
+    /// * `max_withdrawal_per_window` – cap per window; must be `>= 0`.
+    /// * `withdrawal_window_secs` – window length in seconds.
+    ///
+    /// # Errors
+    /// * `Unauthorized` – caller is not the treasury recipient.
+    /// * `InvalidRateLimitConfig` – the amount/window pair is inconsistent
+    ///   (one is zero while the other is non-zero, or the amount is negative).
+    ///
+    /// # Events
+    /// Emits a `treasury_withdraw_limit_set` event with the new limit and window.
     pub fn set_treasury_withdraw_limit(
         env: Env,
         caller: Address,
@@ -5218,6 +5405,8 @@ impl PredinexContract {
         Ok(())
     }
 
+    /// Return the configured treasury withdrawal rate limit. Both fields are 0
+    /// when no limit is set. Read-only.
     pub fn get_treasury_withdraw_limit(env: Env) -> TreasuryWithdrawalRateLimitConfig {
         TreasuryWithdrawalRateLimitConfig {
             max_withdrawal_per_window: env
@@ -5266,6 +5455,29 @@ impl PredinexContract {
         Ok(())
     }
 
+    /// Withdraw `amount` tokens from the accrued treasury to the treasury
+    /// recipient. Only the treasury recipient may call this.
+    ///
+    /// Decrements the on-chain treasury ledger and transfers the tokens out,
+    /// subject to any configured withdrawal rate limit
+    /// (see [`set_treasury_withdraw_limit`](Self::set_treasury_withdraw_limit)).
+    ///
+    /// # Arguments
+    /// * `caller` – must authorize the call and be the treasury recipient.
+    /// * `amount` – tokens to withdraw; must be `> 0` and `<=` the current
+    ///   treasury balance (see
+    ///   [`get_withdrawable_treasury`](Self::get_withdrawable_treasury)).
+    ///
+    /// # Errors
+    /// * `NotInitialized` – contract not initialized.
+    /// * `Unauthorized` – caller is not the treasury recipient.
+    /// * `InvalidWithdrawalAmount` – `amount <= 0`.
+    /// * `InsufficientTreasuryBalance` – `amount` exceeds the treasury balance.
+    /// * `RateLimitExceeded` – the withdrawal would breach the configured
+    ///   per-window limit.
+    ///
+    /// # Events
+    /// Emits a `treasury_withdrawn` event.
     pub fn withdraw_treasury(env: Env, caller: Address, amount: i128) -> Result<(), ContractError> {
         caller.require_auth();
 
@@ -5712,6 +5924,9 @@ impl PredinexContract {
         Some(PoolBetLimits { min_bet, max_bet })
     }
 
+    /// Return the next pool ID to be assigned (i.e. one past the highest
+    /// existing pool ID). Since IDs start at 1, this also equals
+    /// `number_of_pools + 1`. Read-only.
     pub fn get_pool_count(env: Env) -> u32 {
         if !Self::is_initialized(&env) {
             panic_with_error!(&env, ContractError::NotInitialized);
@@ -5780,6 +5995,8 @@ impl PredinexContract {
         result
     }
 
+    /// Return every outcome of a pool with its index, label, and current staked
+    /// total. Returns an empty vector if the pool does not exist. Read-only.
     pub fn get_pool_outcomes(env: Env, pool_id: u32) -> Vec<PoolOutcome> {
         let mut result = Vec::new(&env);
         if let Some(pool) = env
@@ -5800,12 +6017,34 @@ impl PredinexContract {
         result
     }
 
+    /// Return the off-chain metadata URI associated with a pool, or `None` if
+    /// none is set. Read-only.
     pub fn get_pool_metadata(env: Env, pool_id: u32) -> Option<String> {
         env.storage()
             .persistent()
             .get(&DataKey::PoolMetadata(pool_id))
     }
 
+    /// Set or clear a pool's off-chain metadata URI. Only the pool creator may
+    /// call this.
+    ///
+    /// Passing `Some(uri)` stores/overwrites the metadata; passing `None`
+    /// removes it.
+    ///
+    /// # Arguments
+    /// * `creator` – must authorize the call and be the pool creator.
+    /// * `pool_id` – the pool to update.
+    /// * `metadata_uri` – `Some(uri)` to set (must use `https://`, `ipfs://`, or
+    ///   `ar://` and be within length limits), or `None` to clear.
+    ///
+    /// # Errors
+    /// * `PoolNotFound` – pool does not exist.
+    /// * `Unauthorized` – caller is not the pool creator.
+    /// * `InvalidOutcome` / `DescriptionTooLong` – the URI fails validation.
+    ///
+    /// # Events
+    /// Emits `pool_metadata_set` when a URI is stored, or `pool_metadata_cleared`
+    /// when it is removed.
     pub fn set_pool_metadata(
         env: Env,
         creator: Address,
@@ -5862,6 +6101,29 @@ impl PredinexContract {
         Ok(())
     }
 
+    /// Create a reusable pool template. Only the treasury recipient (admin) may
+    /// call this.
+    ///
+    /// Templates capture default title/description/outcomes/duration/metadata so
+    /// pools can later be spun up from them via
+    /// [`create_pool_from_template`](Self::create_pool_from_template). The same
+    /// field validation as [`create_pool`](Self::create_pool) applies.
+    ///
+    /// # Arguments
+    /// * `caller` – must authorize the call and be the treasury recipient.
+    /// * `title` / `description` / `outcomes` / `duration` / `metadata_uri` –
+    ///   validated as in [`create_multi_outcome_pool`](Self::create_multi_outcome_pool).
+    ///
+    /// # Returns
+    /// The newly assigned `template_id`.
+    ///
+    /// # Errors
+    /// * `Unauthorized` – caller is not the treasury recipient.
+    /// * The field-validation errors of
+    ///   [`create_multi_outcome_pool`](Self::create_multi_outcome_pool).
+    ///
+    /// # Events
+    /// Emits a `pool_template_created` event.
     pub fn create_pool_template(
         env: Env,
         caller: Address,
@@ -5930,6 +6192,25 @@ impl PredinexContract {
         Ok(template_id)
     }
 
+    /// Overwrite an existing pool template with new field values. Only the
+    /// treasury recipient (admin) may call this.
+    ///
+    /// The template's `id` is preserved regardless of the `id` field on the
+    /// passed `template`. All fields are re-validated as on creation.
+    ///
+    /// # Arguments
+    /// * `caller` – must authorize the call and be the treasury recipient.
+    /// * `template_id` – id of the template to update; must already exist.
+    /// * `template` – new template contents (its `id` field is ignored).
+    ///
+    /// # Errors
+    /// * `Unauthorized` – caller is not the treasury recipient.
+    /// * `PoolNotFound` – no template with `template_id` exists.
+    /// * The field-validation errors of
+    ///   [`create_pool_template`](Self::create_pool_template).
+    ///
+    /// # Events
+    /// Emits a `pool_template_updated` event.
     pub fn update_pool_template(
         env: Env,
         caller: Address,
@@ -5992,6 +6273,20 @@ impl PredinexContract {
         Ok(())
     }
 
+    /// Delete a pool template. Only the treasury recipient (admin) may call this.
+    ///
+    /// Existing pools created from the template are unaffected.
+    ///
+    /// # Arguments
+    /// * `caller` – must authorize the call and be the treasury recipient.
+    /// * `template_id` – id of the template to remove; must exist.
+    ///
+    /// # Errors
+    /// * `Unauthorized` – caller is not the treasury recipient.
+    /// * `PoolNotFound` – no template with `template_id` exists.
+    ///
+    /// # Events
+    /// Emits a `pool_template_deleted` event.
     pub fn delete_pool_template(
         env: Env,
         caller: Address,
@@ -6020,6 +6315,8 @@ impl PredinexContract {
         Ok(())
     }
 
+    /// Return all stored pool templates (up to 50). Callable by anyone.
+    /// Read-only.
     pub fn get_templates(env: Env) -> Vec<PoolTemplate> {
         let mut templates = Vec::new(&env);
         let next_id = env
@@ -6064,6 +6361,29 @@ impl PredinexContract {
         public_templates
     }
 
+    /// Create an open pool from a stored template, applying optional overrides.
+    ///
+    /// Each field of `overrides` that is `Some` replaces the corresponding
+    /// template value; `None` fields fall back to the template. The resulting
+    /// pool is created exactly as by [`create_pool`](Self::create_pool)
+    /// (immediate open, fee charged, validation applied, `create_pool` event
+    /// emitted).
+    ///
+    /// # Arguments
+    /// * `creator` – pool creator; must authorize the call and pay any creation fee.
+    /// * `template_id` – id of the template to instantiate; must exist.
+    /// * `overrides` – per-field overrides; any `Some` field replaces the template's.
+    ///
+    /// # Returns
+    /// The newly assigned `pool_id`.
+    ///
+    /// # Errors
+    /// * `PoolNotFound` – no template with `template_id` exists.
+    /// * The field-validation errors of [`create_pool`](Self::create_pool).
+    ///
+    /// # Events
+    /// Emits both a `create_pool` event and a `pool_created_from_template` event
+    /// linking the template and the new pool.
     pub fn create_pool_from_template(
         env: Env,
         creator: Address,
@@ -6491,6 +6811,8 @@ impl PredinexContract {
         ClaimPreview::Claimable(amount)
     }
 
+    /// Return the number of unique participants who have placed at least one
+    /// bet in the pool, or 0 if the pool does not exist. Read-only.
     pub fn get_participant_count(env: Env, pool_id: u32) -> u32 {
         env.storage()
             .persistent()

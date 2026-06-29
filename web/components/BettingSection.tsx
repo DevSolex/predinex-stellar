@@ -2,8 +2,9 @@
 import { createScopedLogger } from '@/app/lib/logger';
 const log = createScopedLogger('BettingSection');
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Loader2, Wallet, AlertCircle } from 'lucide-react';
+import { validateBetAmount } from '@/app/lib/validators';
 import type { Pool } from '@/app/lib/adapters/types';
 import { useWallet } from '@/components/WalletAdapterProvider';
 import { useToast } from '@/providers/ToastProvider';
@@ -26,6 +27,7 @@ export default function BettingSection({ pool, poolId, onBetSuccess }: BettingSe
     const { isConnected, address, connect } = wallet;
     const { showToast } = useToast();
     const [betAmount, setBetAmount] = useState('');
+    const [amountTouched, setAmountTouched] = useState(false);
     const [isBetting, setIsBetting] = useState(false);
     const [feePrompt, setFeePrompt] = useState<{ feeStroops: string; resolve: (v: boolean) => void } | null>(null);
     const [stage, setStage] = useState<TxStage>('idle');
@@ -44,6 +46,36 @@ export default function BettingSection({ pool, poolId, onBetSuccess }: BettingSe
     const walletBalance: number | null = isConnected ? 100.0 : null;
 
     const { isMismatch, expectedNetworkName } = useNetworkMismatch();
+
+    // Inline, client-side validation of the bet amount. Returns a human-readable
+    // error string, or null when the amount is valid for this pool. Runs on every
+    // change/blur so the form can show feedback and disable submission before the
+    // user ever triggers a transaction.
+    const amountError = useMemo<string | null>(() => {
+        if (betAmount.trim() === '') {
+            return 'Amount is required';
+        }
+        const amountXlm = parseFloat(betAmount);
+        // Base checks (number, > 0, global bounds) reuse the shared validator.
+        const base = validateBetAmount(amountXlm);
+        if (!base.valid) {
+            return base.error ?? 'Invalid amount';
+        }
+        // Pool-specific limits take precedence over the global bounds.
+        if (hasMinBet && amountXlm < minBetXlm) {
+            return `Minimum bet is ${minBetXlm} XLM`;
+        }
+        if (hasMaxBet && maxBetXlm !== null && amountXlm > maxBetXlm) {
+            return `Maximum bet is ${maxBetXlm} XLM`;
+        }
+        if (walletBalance !== null && amountXlm > walletBalance) {
+            return `Amount exceeds your balance of ${walletBalance.toFixed(2)} XLM`;
+        }
+        return null;
+    }, [betAmount, hasMinBet, minBetXlm, hasMaxBet, maxBetXlm, walletBalance]);
+
+    const isAmountInvalid = amountError !== null;
+    const showAmountError = amountTouched && isAmountInvalid;
 
     const placeBet = async (outcome: number) => {
         if (!isConnected) {
@@ -240,25 +272,42 @@ export default function BettingSection({ pool, poolId, onBetSuccess }: BettingSe
                     placeholder="e.g., 10"
                     value={betAmount}
                     onChange={(e) => setBetAmount(e.target.value)}
+                    onBlur={() => setAmountTouched(true)}
                     disabled={isBetting || (walletBalance !== null && hasMinBet && walletBalance < minBetXlm) || isMismatch}
                     aria-label="Enter bet amount in XLM"
-                    aria-describedby="bet-limits"
-                    className="w-full px-4 py-3 rounded-lg bg-background border border-input outline-none focus:border-primary focus:ring-2 focus:ring-primary/50"
+                    aria-invalid={showAmountError}
+                    aria-describedby={showAmountError ? 'bet-amount-error' : 'bet-limits'}
+                    className={`w-full px-4 py-3 rounded-lg bg-background border outline-none focus:ring-2 ${
+                        showAmountError
+                            ? 'border-red-500 focus:border-red-500 focus:ring-red-500/50'
+                            : 'border-input focus:border-primary focus:ring-primary/50'
+                    }`}
                 />
-                <p id="bet-limits" className="text-xs text-muted-foreground mt-2">
-                    Bet limits:{' '}
-                    {hasMinBet ? `Min ${minBetXlm} XLM` : 'No minimum'}
-                    {hasMaxBet && maxBetXlm !== null ? `, Max ${maxBetXlm} XLM` : ', No maximum'}
-                </p>
+                {showAmountError ? (
+                    <p
+                        id="bet-amount-error"
+                        role="alert"
+                        className="text-xs text-red-500 mt-2 flex items-center gap-1"
+                    >
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                        {amountError}
+                    </p>
+                ) : (
+                    <p id="bet-limits" className="text-xs text-muted-foreground mt-2">
+                        Bet limits:{' '}
+                        {hasMinBet ? `Min ${minBetXlm} XLM` : 'No minimum'}
+                        {hasMaxBet && maxBetXlm !== null ? `, Max ${maxBetXlm} XLM` : ', No maximum'}
+                    </p>
+                )}
             </div>
 
             {/* Bet buttons */}
             <div className="grid grid-cols-2 gap-4" role="group" aria-label="Place your bet">
                 <button
                     onClick={() => placeBet(0)}
-                    disabled={isBetting || (walletBalance !== null && hasMinBet && walletBalance < minBetXlm) || isMismatch}
+                    disabled={isBetting || isAmountInvalid || (walletBalance !== null && hasMinBet && walletBalance < minBetXlm) || isMismatch}
                     aria-label={`Bet on ${pool.outcomeA}`}
-                    className="py-4 bg-green-600 hover:bg-green-700 text-white font-bold rounded-xl transition-all disabled:opacity-50 flex justify-center items-center gap-2"
+                    className="py-4 bg-green-600 hover:bg-green-700 text-white font-bold rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-2"
                 >
                     {isBetting ? (
                         <Loader2 className="w-5 h-5 animate-spin" aria-hidden="true" />
@@ -270,9 +319,9 @@ export default function BettingSection({ pool, poolId, onBetSuccess }: BettingSe
                 </button>
                 <button
                     onClick={() => placeBet(1)}
-                    disabled={isBetting || (walletBalance !== null && hasMinBet && walletBalance < minBetXlm) || isMismatch}
+                    disabled={isBetting || isAmountInvalid || (walletBalance !== null && hasMinBet && walletBalance < minBetXlm) || isMismatch}
                     aria-label={`Bet on ${pool.outcomeB}`}
-                    className="py-4 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl transition-all disabled:opacity-50 flex justify-center items-center gap-2"
+                    className="py-4 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-2"
                 >
                     {isBetting ? (
                         <Loader2 className="w-5 h-5 animate-spin" aria-hidden="true" />
