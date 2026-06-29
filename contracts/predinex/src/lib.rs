@@ -27,6 +27,8 @@ mod test;
 mod validation_hardening_tests;
 mod validation_prop_tests;
 mod webhook_test;
+mod lp_tests;
+mod cross_chain_tests;
 
 // ── Issue #175: Event schema versioning ──────────────────────────────────────
 //
@@ -212,6 +214,32 @@ pub enum DataKey {
     /// #625 — Pending rescue request waiting out the 24-hour timelock.
     /// Value: (token: Address, to: Address, amount: i128, not_before: u64)
     PendingRescue,
+    /// #716 — Cross-chain mirror configuration for a pool.
+    PoolMirror(u32),
+    /// #716 — Mapping from unified pool ID to source chain pool.
+    MirrorByUnifiedId(u32),
+    /// #716 — Auto-incrementing unified pool ID counter.
+    UnifiedPoolCounter,
+    /// #716 — Bridge timeout in seconds for cross-chain settlements.
+    BridgeTimeout,
+    /// #716 — Dispute window for cross-chain settlements (seconds).
+    CrossChainDisputeWindow,
+    /// #714 — Per-pool LP position for a user (shares + reward debt).
+    LpPosition(u32, Address),
+    /// #714 — Total LP shares minted for a pool.
+    LpTotalShares(u32),
+    /// #714 — Total liquidity deposited by LPs into a pool.
+    LpTotalLiquidity(u32),
+    /// #714 — Cumulative fee-per-share accumulator (scaled by LP_PRECISION).
+    LpFeePerShare(u32),
+    /// #714 — Percentage of protocol fees allocated to LP rewards (basis points).
+    LpFeeAllocationBps,
+    /// #714 — Per-pool accumulated LP reward pool (unclaimed fees).
+    LpRewardPool(u32),
+    /// #714 — Optional time-locked LP stake for bonus multiplier.
+    LpStake(u32, Address),
+    /// #714 — Bonus multiplier for time-locked LP staking (basis points, 10000 = 1x).
+    LpStakeBoostBps,
 }
 
 // #189 — TTL bump policy for persistent storage entries.
@@ -385,6 +413,24 @@ pub enum ContractError {
     DuplicateToken = 67,
     /// A scheduled claim is not yet due for execution.
     ScheduledClaimNotDue = 68,
+    /// #716 — Pool mirror already exists.
+    MirrorAlreadyExists = 69,
+    /// #716 — No mirror found for this pool.
+    MirrorNotFound = 70,
+    /// #716 — Source chain settlement not verified.
+    SourceSettlementNotVerified = 71,
+    /// #716 — Bridge timeout exceeded.
+    BridgeTimeoutExceeded = 72,
+    /// #714 — LP deposit amount must be positive.
+    InvalidLpAmount = 73,
+    /// #714 — Insufficient LP shares for withdrawal.
+    InsufficientLpShares = 74,
+    /// #714 — No LP rewards available to claim.
+    NoLpRewards = 75,
+    /// #714 — LP stake is still locked; cannot unstake before lock expires.
+    LpStakeLocked = 76,
+    /// #714 — No active LP stake found.
+    NoLpStake = 77,
 }
 
 /// #176 — Settlement source tag indicating who initiated pool settlement.
@@ -977,6 +1023,114 @@ pub struct TwapSnapshot {
 pub struct TwapUpdatedEvent {
     pub timestamp: u64,
     pub odds: Vec<i128>,
+}
+
+/// #716 — Supported chain identifier for cross-chain pool mirroring.
+#[derive(Clone, PartialEq, Debug)]
+#[contracttype]
+pub enum ChainId {
+    Stellar = 0,
+    Ethereum = 1,
+    Polygon = 2,
+    Arbitrum = 3,
+    Solana = 4,
+}
+
+/// #716 — Cross-chain pool mirror configuration.
+#[derive(Clone)]
+#[contracttype]
+pub struct PoolMirrorConfig {
+    pub source_pool_id: u32,
+    pub unified_pool_id: u32,
+    pub source_chain: ChainId,
+    pub target_chain: ChainId,
+    pub bridge_contract: Address,
+    pub created_at: u64,
+    pub is_settled: bool,
+    pub winning_outcome: Option<u32>,
+}
+
+/// #716 — Event payload emitted when a mirror pool is created.
+#[derive(Clone)]
+#[contracttype]
+pub struct MirrorCreatedEvent {
+    pub source_pool_id: u32,
+    pub unified_pool_id: u32,
+    pub source_chain: ChainId,
+    pub target_chain: ChainId,
+}
+
+/// #716 — Event payload emitted on cross-chain settlement.
+#[derive(Clone)]
+#[contracttype]
+pub struct CrossChainSettlementEvent {
+    pub unified_pool_id: u32,
+    pub winning_outcome: u32,
+    pub source_chain: ChainId,
+}
+
+/// #716 — Cross-chain bridge transfer event.
+#[derive(Clone)]
+#[contracttype]
+pub struct BridgeTransferEvent {
+    pub unified_pool_id: u32,
+    pub user: Address,
+    pub amount: i128,
+    pub source_chain: ChainId,
+    pub target_chain: ChainId,
+}
+
+/// #714 — LP position for a user in a specific pool.
+#[derive(Clone)]
+#[contracttype]
+pub struct LpPosition {
+    pub shares: i128,
+    pub reward_debt: i128,
+}
+
+/// #714 — Time-locked LP stake for bonus rewards.
+#[derive(Clone)]
+#[contracttype]
+pub struct LpStakeInfo {
+    pub shares: i128,
+    pub lock_until: u64,
+}
+
+/// #714 — LP reward configuration returned by view functions.
+#[derive(Clone)]
+#[contracttype]
+pub struct LpRewardConfig {
+    pub fee_allocation_bps: u32,
+    pub stake_boost_bps: u32,
+}
+
+/// #714 — Event payload emitted by LP deposit.
+#[derive(Clone)]
+#[contracttype]
+pub struct LpDepositEvent {
+    pub user: Address,
+    pub pool_id: u32,
+    pub amount: i128,
+    pub shares_minted: i128,
+}
+
+/// #714 — Event payload emitted by LP withdrawal.
+#[derive(Clone)]
+#[contracttype]
+pub struct LpWithdrawEvent {
+    pub user: Address,
+    pub pool_id: u32,
+    pub amount: i128,
+    pub shares_burned: i128,
+}
+
+/// #714 — Event payload emitted by LP reward claim.
+#[derive(Clone)]
+#[contracttype]
+pub struct LpRewardClaimEvent {
+    pub user: Address,
+    pub pool_id: u32,
+    pub amount: i128,
 }
 
 #[contract]
@@ -7058,6 +7212,305 @@ impl PredinexContract {
             );
         }
 
+        Ok(())
+    }
+
+    // ── #716 — Cross-Chain Pool Mirroring ────────────────────────────────────
+
+    pub fn set_bridge_timeout(env: Env, caller: Address, timeout_secs: u64) -> Result<(), ContractError> {
+        caller.require_auth();
+        Self::require_treasury_recipient(&env, &caller)?;
+        env.storage().persistent().set(&DataKey::BridgeTimeout, &timeout_secs);
+        env.events().publish((Symbol::new(&env, "bridge_timeout_set"), event_version(&env)), timeout_secs);
+        Ok(())
+    }
+
+    pub fn set_cross_chain_dispute_window(env: Env, caller: Address, window_secs: u64) -> Result<(), ContractError> {
+        caller.require_auth();
+        Self::require_treasury_recipient(&env, &caller)?;
+        env.storage().persistent().set(&DataKey::CrossChainDisputeWindow, &window_secs);
+        env.events().publish((Symbol::new(&env, "cross_chain_dispute_window_set"), event_version(&env)), window_secs);
+        Ok(())
+    }
+
+    pub fn create_pool_mirror(env: Env, caller: Address, source_pool_id: u32, source_chain: ChainId, target_chain: ChainId, bridge_contract: Address) -> Result<u32, ContractError> {
+        caller.require_auth();
+        Self::require_treasury_recipient(&env, &caller)?;
+        let _pool = env.storage().persistent().get::<_, Pool>(&DataKey::Pool(source_pool_id)).ok_or(ContractError::PoolNotFound)?;
+        if env.storage().persistent().has(&DataKey::PoolMirror(source_pool_id)) {
+            return Err(ContractError::MirrorAlreadyExists);
+        }
+        let unified_id: u32 = env.storage().persistent().get(&DataKey::UnifiedPoolCounter).unwrap_or(0) + 1;
+        let mirror = PoolMirrorConfig {
+            source_pool_id, unified_pool_id: unified_id, source_chain: source_chain.clone(), target_chain: target_chain.clone(),
+            bridge_contract, created_at: env.ledger().timestamp(), is_settled: false, winning_outcome: None,
+        };
+        env.storage().persistent().set(&DataKey::PoolMirror(source_pool_id), &mirror);
+        env.storage().persistent().set(&DataKey::MirrorByUnifiedId(unified_id), &mirror);
+        env.storage().persistent().set(&DataKey::UnifiedPoolCounter, &unified_id);
+        env.storage().persistent().extend_ttl(&DataKey::PoolMirror(source_pool_id), POOL_BUMP_THRESHOLD, POOL_BUMP_TARGET);
+        env.storage().persistent().extend_ttl(&DataKey::MirrorByUnifiedId(unified_id), POOL_BUMP_THRESHOLD, POOL_BUMP_TARGET);
+        env.events().publish(
+            (Symbol::new(&env, "mirror_created"), event_version(&env), source_pool_id),
+            MirrorCreatedEvent { source_pool_id, unified_pool_id: unified_id, source_chain, target_chain },
+        );
+        Ok(unified_id)
+    }
+
+    pub fn settle_mirror_from_source(env: Env, caller: Address, source_pool_id: u32, winning_outcome: u32) -> Result<(), ContractError> {
+        caller.require_auth();
+        Self::require_treasury_recipient(&env, &caller)?;
+        let mut mirror: PoolMirrorConfig = env.storage().persistent().get(&DataKey::PoolMirror(source_pool_id)).ok_or(ContractError::MirrorNotFound)?;
+        if mirror.is_settled { return Err(ContractError::PoolAlreadySettled); }
+        let timeout: u64 = env.storage().persistent().get(&DataKey::BridgeTimeout).unwrap_or(86_400);
+        let elapsed = env.ledger().timestamp().saturating_sub(mirror.created_at);
+        if elapsed > timeout && timeout > 0 { return Err(ContractError::BridgeTimeoutExceeded); }
+        mirror.is_settled = true;
+        mirror.winning_outcome = Some(winning_outcome);
+        env.storage().persistent().set(&DataKey::PoolMirror(source_pool_id), &mirror);
+        env.storage().persistent().set(&DataKey::MirrorByUnifiedId(mirror.unified_pool_id), &mirror);
+        env.events().publish(
+            (Symbol::new(&env, "cross_chain_settled"), event_version(&env), mirror.unified_pool_id),
+            CrossChainSettlementEvent { unified_pool_id: mirror.unified_pool_id, winning_outcome, source_chain: mirror.source_chain },
+        );
+        Ok(())
+    }
+
+    pub fn get_pool_mirror(env: Env, source_pool_id: u32) -> Option<PoolMirrorConfig> {
+        env.storage().persistent().get(&DataKey::PoolMirror(source_pool_id))
+    }
+
+    pub fn get_mirror_by_unified_id(env: Env, unified_id: u32) -> Option<PoolMirrorConfig> {
+        env.storage().persistent().get(&DataKey::MirrorByUnifiedId(unified_id))
+    }
+
+    pub fn get_bridge_timeout(env: Env) -> u64 {
+        env.storage().persistent().get(&DataKey::BridgeTimeout).unwrap_or(86_400)
+    }
+
+    pub fn get_cross_chain_dispute_window(env: Env) -> u64 {
+        env.storage().persistent().get(&DataKey::CrossChainDisputeWindow).unwrap_or(DISPUTE_WINDOW_SECS)
+    }
+
+    // ── #714 — Liquidity Provider Incentives ───────────────────────────────
+
+    pub fn set_lp_fee_allocation(env: Env, caller: Address, fee_allocation_bps: u32) -> Result<(), ContractError> {
+        caller.require_auth();
+        Self::require_treasury_recipient(&env, &caller)?;
+        if fee_allocation_bps > 10_000 { return Err(ContractError::FeeOutOfBounds); }
+        env.storage().persistent().set(&DataKey::LpFeeAllocationBps, &fee_allocation_bps);
+        env.events().publish((Symbol::new(&env, "lp_fee_allocation_set"), event_version(&env)), fee_allocation_bps);
+        Ok(())
+    }
+
+    pub fn set_lp_stake_boost(env: Env, caller: Address, boost_bps: u32) -> Result<(), ContractError> {
+        caller.require_auth();
+        Self::require_treasury_recipient(&env, &caller)?;
+        if boost_bps < 10_000 || boost_bps > 50_000 { return Err(ContractError::FeeOutOfBounds); }
+        env.storage().persistent().set(&DataKey::LpStakeBoostBps, &boost_bps);
+        env.events().publish((Symbol::new(&env, "lp_stake_boost_set"), event_version(&env)), boost_bps);
+        Ok(())
+    }
+
+    pub fn deposit_liquidity(env: Env, user: Address, pool_id: u32, amount: i128) -> Result<i128, ContractError> {
+        user.require_auth();
+        Self::require_not_paused(&env)?;
+        if amount <= 0 { return Err(ContractError::InvalidLpAmount); }
+        let _pool = env.storage().persistent().get::<_, Pool>(&DataKey::Pool(pool_id)).ok_or(ContractError::PoolNotFound)?;
+        let token_address: Address = env.storage().persistent().get(&DataKey::Token).ok_or(ContractError::NotInitialized)?;
+        token::Client::new(&env, &token_address).transfer(&user, &env.current_contract_address(), &amount);
+
+        let total_liquidity: i128 = env.storage().persistent().get(&DataKey::LpTotalLiquidity(pool_id)).unwrap_or(0);
+        let total_shares: i128 = env.storage().persistent().get(&DataKey::LpTotalShares(pool_id)).unwrap_or(0);
+        let shares_to_mint = if total_shares == 0 || total_liquidity == 0 { amount } else {
+            amount.checked_mul(total_shares).ok_or(ContractError::PoolTotalOverflow)? / total_liquidity
+        };
+        if shares_to_mint <= 0 { return Err(ContractError::InvalidLpAmount); }
+
+        let fee_per_share: i128 = env.storage().persistent().get(&DataKey::LpFeePerShare(pool_id)).unwrap_or(0);
+        let mut position: LpPosition = env.storage().persistent().get(&DataKey::LpPosition(pool_id, user.clone()))
+            .unwrap_or(LpPosition { shares: 0, reward_debt: 0 });
+        position.shares = position.shares.checked_add(shares_to_mint).ok_or(ContractError::PoolTotalOverflow)?;
+        position.reward_debt = position.shares.checked_mul(fee_per_share).ok_or(ContractError::PoolTotalOverflow)? / LP_PRECISION;
+
+        env.storage().persistent().set(&DataKey::LpPosition(pool_id, user.clone()), &position);
+        env.storage().persistent().set(&DataKey::LpTotalShares(pool_id), &(total_shares.checked_add(shares_to_mint).ok_or(ContractError::PoolTotalOverflow)?));
+        env.storage().persistent().set(&DataKey::LpTotalLiquidity(pool_id), &(total_liquidity.checked_add(amount).ok_or(ContractError::PoolTotalOverflow)?));
+        env.storage().persistent().extend_ttl(&DataKey::LpPosition(pool_id, user.clone()), POOL_BUMP_THRESHOLD, POOL_BUMP_TARGET);
+        env.storage().persistent().extend_ttl(&DataKey::LpTotalShares(pool_id), POOL_BUMP_THRESHOLD, POOL_BUMP_TARGET);
+        env.storage().persistent().extend_ttl(&DataKey::LpTotalLiquidity(pool_id), POOL_BUMP_THRESHOLD, POOL_BUMP_TARGET);
+
+        env.events().publish(
+            (Symbol::new(&env, "lp_deposit"), event_version(&env), pool_id, user),
+            LpDepositEvent { user: _pool.creator.clone(), pool_id, amount, shares_minted: shares_to_mint },
+        );
+        Ok(shares_to_mint)
+    }
+
+    pub fn withdraw_liquidity(env: Env, user: Address, pool_id: u32, shares: i128) -> Result<i128, ContractError> {
+        user.require_auth();
+        Self::require_not_paused(&env)?;
+        if shares <= 0 { return Err(ContractError::InvalidLpAmount); }
+        let _pool = env.storage().persistent().get::<_, Pool>(&DataKey::Pool(pool_id)).ok_or(ContractError::PoolNotFound)?;
+        let mut position: LpPosition = env.storage().persistent().get(&DataKey::LpPosition(pool_id, user.clone())).ok_or(ContractError::InsufficientLpShares)?;
+        if position.shares < shares { return Err(ContractError::InsufficientLpShares); }
+
+        if let Some(stake) = env.storage().persistent().get::<_, LpStakeInfo>(&DataKey::LpStake(pool_id, user.clone())) {
+            let unstaked = position.shares - stake.shares;
+            if shares > unstaked { return Err(ContractError::LpStakeLocked); }
+        }
+
+        let total_liquidity: i128 = env.storage().persistent().get(&DataKey::LpTotalLiquidity(pool_id)).unwrap_or(0);
+        let total_shares: i128 = env.storage().persistent().get(&DataKey::LpTotalShares(pool_id)).unwrap_or(0);
+        if total_shares == 0 { return Err(ContractError::InsufficientLpShares); }
+        let withdraw_amount = shares.checked_mul(total_liquidity).ok_or(ContractError::PoolTotalOverflow)? / total_shares;
+        if withdraw_amount <= 0 { return Err(ContractError::InvalidLpAmount); }
+
+        let fee_per_share: i128 = env.storage().persistent().get(&DataKey::LpFeePerShare(pool_id)).unwrap_or(0);
+        let pending = position.shares.checked_mul(fee_per_share).ok_or(ContractError::PoolTotalOverflow)? / LP_PRECISION - position.reward_debt;
+        if pending > 0 {
+            let reward_pool: i128 = env.storage().persistent().get(&DataKey::LpRewardPool(pool_id)).unwrap_or(0);
+            let actual_reward = if pending > reward_pool { reward_pool } else { pending };
+            if actual_reward > 0 {
+                let token_address: Address = env.storage().persistent().get(&DataKey::Token).ok_or(ContractError::NotInitialized)?;
+                token::Client::new(&env, &token_address).transfer(&env.current_contract_address(), &user, &actual_reward);
+                env.storage().persistent().set(&DataKey::LpRewardPool(pool_id), &(reward_pool - actual_reward));
+            }
+        }
+
+        position.shares -= shares;
+        position.reward_debt = position.shares.checked_mul(fee_per_share).ok_or(ContractError::PoolTotalOverflow)? / LP_PRECISION;
+        if position.shares == 0 {
+            env.storage().persistent().remove(&DataKey::LpPosition(pool_id, user.clone()));
+        } else {
+            env.storage().persistent().set(&DataKey::LpPosition(pool_id, user.clone()), &position);
+            env.storage().persistent().extend_ttl(&DataKey::LpPosition(pool_id, user.clone()), POOL_BUMP_THRESHOLD, POOL_BUMP_TARGET);
+        }
+        env.storage().persistent().set(&DataKey::LpTotalShares(pool_id), &(total_shares - shares));
+        env.storage().persistent().set(&DataKey::LpTotalLiquidity(pool_id), &(total_liquidity - withdraw_amount));
+
+        let token_address: Address = env.storage().persistent().get(&DataKey::Token).ok_or(ContractError::NotInitialized)?;
+        token::Client::new(&env, &token_address).transfer(&env.current_contract_address(), &user, &withdraw_amount);
+
+        env.events().publish(
+            (Symbol::new(&env, "lp_withdraw"), event_version(&env), pool_id, user),
+            LpWithdrawEvent { user: _pool.creator.clone(), pool_id, amount: withdraw_amount, shares_burned: shares },
+        );
+        Ok(withdraw_amount)
+    }
+
+    pub fn claim_lp_rewards(env: Env, user: Address, pool_id: u32) -> Result<i128, ContractError> {
+        user.require_auth();
+        Self::require_not_paused(&env)?;
+        let mut position: LpPosition = env.storage().persistent().get(&DataKey::LpPosition(pool_id, user.clone())).ok_or(ContractError::NoLpRewards)?;
+        let fee_per_share: i128 = env.storage().persistent().get(&DataKey::LpFeePerShare(pool_id)).unwrap_or(0);
+        let mut pending = position.shares.checked_mul(fee_per_share).ok_or(ContractError::PoolTotalOverflow)? / LP_PRECISION - position.reward_debt;
+
+        if let Some(stake) = env.storage().persistent().get::<_, LpStakeInfo>(&DataKey::LpStake(pool_id, user.clone())) {
+            if env.ledger().timestamp() < stake.lock_until {
+                let boost_bps: u32 = env.storage().persistent().get(&DataKey::LpStakeBoostBps).unwrap_or(10_000);
+                let staked_fraction = stake.shares.checked_mul(10_000).ok_or(ContractError::PoolTotalOverflow)? / position.shares;
+                let boost_portion = pending.checked_mul(staked_fraction).ok_or(ContractError::PoolTotalOverflow)? / 10_000;
+                let boosted = boost_portion.checked_mul(boost_bps as i128).ok_or(ContractError::PoolTotalOverflow)? / 10_000;
+                pending = pending - boost_portion + boosted;
+            }
+        }
+
+        if pending <= 0 { return Err(ContractError::NoLpRewards); }
+        let reward_pool: i128 = env.storage().persistent().get(&DataKey::LpRewardPool(pool_id)).unwrap_or(0);
+        let actual_reward = if pending > reward_pool { reward_pool } else { pending };
+        if actual_reward <= 0 { return Err(ContractError::NoLpRewards); }
+
+        let token_address: Address = env.storage().persistent().get(&DataKey::Token).ok_or(ContractError::NotInitialized)?;
+        token::Client::new(&env, &token_address).transfer(&env.current_contract_address(), &user, &actual_reward);
+        env.storage().persistent().set(&DataKey::LpRewardPool(pool_id), &(reward_pool - actual_reward));
+        position.reward_debt = position.shares.checked_mul(fee_per_share).ok_or(ContractError::PoolTotalOverflow)? / LP_PRECISION;
+        env.storage().persistent().set(&DataKey::LpPosition(pool_id, user.clone()), &position);
+        env.storage().persistent().extend_ttl(&DataKey::LpPosition(pool_id, user.clone()), POOL_BUMP_THRESHOLD, POOL_BUMP_TARGET);
+
+        env.events().publish(
+            (Symbol::new(&env, "lp_reward_claimed"), event_version(&env), pool_id, user.clone()),
+            LpRewardClaimEvent { user, pool_id, amount: actual_reward },
+        );
+        Ok(actual_reward)
+    }
+
+    pub fn stake_lp(env: Env, user: Address, pool_id: u32, shares: i128, duration_secs: u64) -> Result<(), ContractError> {
+        user.require_auth();
+        Self::require_not_paused(&env)?;
+        if shares <= 0 { return Err(ContractError::InvalidLpAmount); }
+        if duration_secs < MIN_POOL_DURATION_SECS { return Err(ContractError::DurationTooShort); }
+        let position: LpPosition = env.storage().persistent().get(&DataKey::LpPosition(pool_id, user.clone())).ok_or(ContractError::InsufficientLpShares)?;
+        let existing_staked: i128 = env.storage().persistent().get::<_, LpStakeInfo>(&DataKey::LpStake(pool_id, user.clone())).map(|s| s.shares).unwrap_or(0);
+        if shares > position.shares - existing_staked { return Err(ContractError::InsufficientLpShares); }
+        let lock_until = env.ledger().timestamp().checked_add(duration_secs).ok_or(ContractError::ExpiryOverflow)?;
+        let new_staked = existing_staked.checked_add(shares).ok_or(ContractError::PoolTotalOverflow)?;
+        let stake = LpStakeInfo { shares: new_staked, lock_until };
+        env.storage().persistent().set(&DataKey::LpStake(pool_id, user.clone()), &stake);
+        env.storage().persistent().extend_ttl(&DataKey::LpStake(pool_id, user.clone()), POOL_BUMP_THRESHOLD, POOL_BUMP_TARGET);
+        env.events().publish((Symbol::new(&env, "lp_staked"), event_version(&env), pool_id, user), (new_staked, lock_until));
+        Ok(())
+    }
+
+    pub fn unstake_lp(env: Env, user: Address, pool_id: u32) -> Result<i128, ContractError> {
+        user.require_auth();
+        let stake: LpStakeInfo = env.storage().persistent().get(&DataKey::LpStake(pool_id, user.clone())).ok_or(ContractError::NoLpStake)?;
+        if env.ledger().timestamp() < stake.lock_until { return Err(ContractError::LpStakeLocked); }
+        let released = stake.shares;
+        env.storage().persistent().remove(&DataKey::LpStake(pool_id, user.clone()));
+        env.events().publish((Symbol::new(&env, "lp_unstaked"), event_version(&env), pool_id, user), released);
+        Ok(released)
+    }
+
+    pub fn get_lp_position(env: Env, pool_id: u32, user: Address) -> LpPosition {
+        env.storage().persistent().get(&DataKey::LpPosition(pool_id, user)).unwrap_or(LpPosition { shares: 0, reward_debt: 0 })
+    }
+
+    pub fn get_pending_lp_rewards(env: Env, pool_id: u32, user: Address) -> i128 {
+        let position: LpPosition = env.storage().persistent().get(&DataKey::LpPosition(pool_id, user)).unwrap_or(LpPosition { shares: 0, reward_debt: 0 });
+        if position.shares == 0 { return 0; }
+        let fee_per_share: i128 = env.storage().persistent().get(&DataKey::LpFeePerShare(pool_id)).unwrap_or(0);
+        let pending = position.shares * fee_per_share / LP_PRECISION - position.reward_debt;
+        if pending < 0 { 0 } else { pending }
+    }
+
+    pub fn get_total_lp_liquidity(env: Env, pool_id: u32) -> i128 {
+        env.storage().persistent().get(&DataKey::LpTotalLiquidity(pool_id)).unwrap_or(0)
+    }
+
+    pub fn get_total_lp_shares(env: Env, pool_id: u32) -> i128 {
+        env.storage().persistent().get(&DataKey::LpTotalShares(pool_id)).unwrap_or(0)
+    }
+
+    pub fn get_lp_reward_config(env: Env) -> LpRewardConfig {
+        LpRewardConfig {
+            fee_allocation_bps: env.storage().persistent().get(&DataKey::LpFeeAllocationBps).unwrap_or(0),
+            stake_boost_bps: env.storage().persistent().get(&DataKey::LpStakeBoostBps).unwrap_or(10_000),
+        }
+    }
+
+    pub fn get_lp_stake(env: Env, pool_id: u32, user: Address) -> Option<LpStakeInfo> {
+        env.storage().persistent().get(&DataKey::LpStake(pool_id, user))
+    }
+
+    pub fn distribute_lp_rewards(env: Env, caller: Address, pool_id: u32, amount: i128) -> Result<(), ContractError> {
+        caller.require_auth();
+        Self::require_treasury_recipient(&env, &caller)?;
+        if amount <= 0 { return Err(ContractError::InvalidLpAmount); }
+        let total_shares: i128 = env.storage().persistent().get(&DataKey::LpTotalShares(pool_id)).unwrap_or(0);
+        if total_shares == 0 { return Err(ContractError::InsufficientLpShares); }
+        let token_address: Address = env.storage().persistent().get(&DataKey::Token).ok_or(ContractError::NotInitialized)?;
+        token::Client::new(&env, &token_address).transfer(&caller, &env.current_contract_address(), &amount);
+        let fee_per_share_delta = amount.checked_mul(LP_PRECISION).ok_or(ContractError::PoolTotalOverflow)? / total_shares;
+        let current_fps: i128 = env.storage().persistent().get(&DataKey::LpFeePerShare(pool_id)).unwrap_or(0);
+        let new_fps = current_fps.checked_add(fee_per_share_delta).ok_or(ContractError::PoolTotalOverflow)?;
+        let reward_pool: i128 = env.storage().persistent().get(&DataKey::LpRewardPool(pool_id)).unwrap_or(0);
+        let new_reward_pool = reward_pool.checked_add(amount).ok_or(ContractError::PoolTotalOverflow)?;
+        env.storage().persistent().set(&DataKey::LpFeePerShare(pool_id), &new_fps);
+        env.storage().persistent().set(&DataKey::LpRewardPool(pool_id), &new_reward_pool);
+        env.storage().persistent().extend_ttl(&DataKey::LpFeePerShare(pool_id), POOL_BUMP_THRESHOLD, POOL_BUMP_TARGET);
+        env.storage().persistent().extend_ttl(&DataKey::LpRewardPool(pool_id), POOL_BUMP_THRESHOLD, POOL_BUMP_TARGET);
+        env.events().publish((Symbol::new(&env, "lp_rewards_distributed"), event_version(&env), pool_id), amount);
         Ok(())
     }
 }
