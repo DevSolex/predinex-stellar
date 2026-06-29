@@ -13,6 +13,9 @@
 
 import { WalletClient, WalletChain } from './wallet-adapter';
 import { WalletErrorType, createWalletError, WalletError } from './wallet-errors';
+import { createScopedLogger } from './logger';
+
+const log = createScopedLogger('FreighterAdapter');
 
 // ── Freighter window shim ──────────────────────────────────────────────────────
 
@@ -112,8 +115,7 @@ export function createFreighterAdapter(
     async connect() {
       if (!isFreighterInstalled()) {
         const err = createWalletError(WalletErrorType.EXTENSION_NOT_FOUND, 'Freighter');
-        console.error('[FreighterAdapter] connect failed:', err.message);
-        // Surface to user: open extension install page
+        log.error(`connect failed: ${err.message}`);
         if (typeof window !== 'undefined') {
           window.open('https://www.freighter.app/', '_blank', 'noopener');
         }
@@ -140,7 +142,7 @@ export function createFreighterAdapter(
         _isConnected = false;
         _address = null;
         const mapped = mapFreighterError(err);
-        console.error('[FreighterAdapter] connect error:', mapped.message);
+        log.error(`connect error: ${mapped.message}`);
         setState({ isConnected: false, address: null, isLoading: false } as Partial<FreighterWalletClient>);
       } finally {
         _isLoading = false;

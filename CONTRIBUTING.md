@@ -13,6 +13,7 @@ Welcome, and thank you for your interest in contributing! This guide covers ever
 5. [Documentation Standards](#5-documentation-standards)
 6. [Issue and PR Workflow](#6-issue-and-pr-workflow)
 7. [CI Expectations](#7-ci-expectations)
+8. [Automated Dependency Updates (Dependabot)](#8-automated-dependency-updates-dependabot)
 
 ---
 
@@ -164,7 +165,7 @@ Significant architectural decisions (new caching strategies, contract interface 
 
 ### Contract interface changes
 
-Any change that touches the contract interface must follow the process in [docs/CONTRACT_VERSIONING.md](./web/docs/CONTRACT_VERSIONING.md). Breaking changes require an explicit major version bump and a migration note before the PR can be merged.
+Any change that touches the contract state or upgrade flow must follow the process in [docs/CONTRACT_UPGRADE_PROCEDURE.md](./docs/CONTRACT_UPGRADE_PROCEDURE.md). Breaking changes require an explicit version bump, a migration plan, and testnet verification before the PR can be merged.
 
 ---
 
@@ -240,3 +241,28 @@ For deeper context on the project architecture, see:
 - [Frontend Architecture](./web/FRONTEND.md)
 - [Local End-to-End Runbook](./docs/local-runbook.md)
 - [Release Process](./RELEASE.md)
+
+---
+
+## 8. Automated Dependency Updates (Dependabot)
+
+Dependabot is configured in [`.github/dependabot.yml`](./.github/dependabot.yml) and opens pull requests weekly for both package ecosystems:
+
+| Ecosystem | Directory | Label |
+|-----------|-----------|-------|
+| npm | `/web` | `dependencies`, `npm` |
+| Cargo | `/contracts/predinex` | `dependencies`, `cargo` |
+
+### Merge policy
+
+The auto-merge workflow in [`.github/workflows/dependabot-auto-merge.yml`](./.github/workflows/dependabot-auto-merge.yml) handles PRs as follows:
+
+| Update type | Action |
+|-------------|--------|
+| **Patch** (`x.y.Z`) | Auto-approved and auto-merged once CI passes — no human action needed |
+| **Minor** (`x.Y.z`) | Auto-merged once CI passes — review is optional |
+| **Major** (`X.y.z`) | PR opened but **not** auto-merged; requires human review and approval |
+
+Patch and minor updates are grouped into a single weekly PR per ecosystem so the review queue stays manageable. Major version bumps always arrive as separate PRs to make breaking-change review straightforward.
+
+If a Dependabot PR sits in CI failure, investigate the failure before merging — do not re-trigger or skip checks.

@@ -29,11 +29,9 @@ fn setup_multi_user() -> MultiUserEnv<'static> {
     let token_id = env.register_stellar_asset_contract_v2(token_admin.clone());
 
     let contract_id = env.register(PredinexContract, ());
-    let client = PredinexContractClient::new(&env, &contract_id);
+    let client: PredinexContractClient<'static> = PredinexContractClient::new(&env, &contract_id);
 
-    client.initialize(&token_id.address(), &token_admin);
-
-    let client: PredinexContractClient<'static> = unsafe { core::mem::transmute(client) };
+    client.initialize(&token_id.address(), &token_admin, &token_admin);
 
     MultiUserEnv {
         env,
@@ -59,6 +57,7 @@ fn make_pool_mu(t: &MultiUserEnv) -> u32 {
         &String::from_str(&t.env, "Yes"),
         &String::from_str(&t.env, "No"),
         &3_600u64,
+        &MIN_CREATOR_DEPOSIT,
     )
 }
 
@@ -551,4 +550,442 @@ fn m10_pool_state_verified_after_every_bet_in_sequence() {
             "total_b must match running sum after each bet"
         );
     }
+}
+
+// ── Suite L — state consistency under load ──────────────────────────────────
+//
+// These tests exercise many distinct users interacting with the same pool in
+// rapid succession (Soroban executes transactions sequentially, so "rapid"
+// here means back-to-back invocations with no ledger advance between them) and
+// assert that participant_count, outcome totals, and payouts stay internally
+// consistent at every step.
+
+/// L1: 50 users place bets on the same pool, then the winning side claims.
+///
+/// 30 users bet on outcome A (winners), 20 on outcome B (losers). After every
+/// bet the running totals and participant_count are re-verified. After
+/// settlement, each winner claims in turn and the per-claim payout, the user's
+/// token balance, and the running sum of payouts are all checked. The pool's
+/// escrow balance must never go negative and the treasury must end holding
+/// exactly the protocol fee plus bounded rounding dust.
+#[test]
+fn l1_fifty_users_same_pool_multiple_winner_claims() {
+    let t = setup_multi_user();
+    let pool_id = make_pool_mu(&t);
+    let token_client = soroban_sdk::token::Client::new(&t.env, &t.token);
+    let contract_addr = t._contract_id.clone();
+
+    let num_winners = 30usize;
+    let num_losers = 20usize;
+    let winner_bet = 100i128;
+    let loser_bet = 50i128;
+
+    let winners: alloc::vec::Vec<Address> = (0..num_winners)
+        .map(|_| Address::generate(&t.env))
+        .collect();
+    let losers: alloc::vec::Vec<Address> =
+        (0..num_losers).map(|_| Address::generate(&t.env)).collect();
+
+    // Interleave A/B bets and verify state after each placement.
+    let mut running_a = 0i128;
+    let mut running_b = 0i128;
+    let mut seen_participants = 0u32;
+    let max_pairs = core::cmp::max(num_winners, num_losers);
+    for i in 0..max_pairs {
+        if i < num_winners {
+            let w = &winners[i];
+            mint(&t.env, &t.token, w, winner_bet);
+            t.client
+                .place_bet(w, &pool_id, &0u32, &winner_bet, &None::<Address>);
+            running_a += winner_bet;
+            seen_participants += 1;
+
+            let pool = t.client.get_pool(&pool_id).expect("pool must exist");
+            assert_eq!(pool.total_a, running_a, "total_a running sum after A bet");
+            assert_eq!(pool.total_b, running_b, "total_b unchanged after A bet");
+            assert_eq!(
+                pool.participant_count, seen_participants,
+                "participant_count must equal number of unique bettors so far"
+            );
+        }
+        if i < num_losers {
+            let l = &losers[i];
+            mint(&t.env, &t.token, l, loser_bet);
+            t.client
+                .place_bet(l, &pool_id, &1u32, &loser_bet, &None::<Address>);
+            running_b += loser_bet;
+            seen_participants += 1;
+
+            let pool = t.client.get_pool(&pool_id).expect("pool must exist");
+            assert_eq!(pool.total_b, running_b, "total_b running sum after B bet");
+            assert_eq!(pool.total_a, running_a, "total_a unchanged after B bet");
+            assert_eq!(
+                pool.participant_count, seen_participants,
+                "participant_count must equal number of unique bettors so far"
+            );
+        }
+    }
+
+    let total_a = winner_bet * num_winners as i128; // 3000
+    let total_b = loser_bet * num_losers as i128; // 1000
+    let total_pool = total_a + total_b; // 4000
+    assert_eq!(
+        t.client.get_pool(&pool_id).unwrap().participant_count,
+        (num_winners + num_losers) as u32,
+        "final participant_count must equal all 50 unique users"
+    );
+    assert_eq!(
+        token_client.balance(&contract_addr),
+        total_pool,
+        "contract escrow must hold every staked token"
+    );
+
+    let fee = (total_pool * 200) / 10_000; // 80
+    let net = total_pool - fee; // 3920
+    let expected_payout = (winner_bet * net) / total_a; // 100 * 3920 / 3000 = 130
+
+    expire_mu(&t.env);
+    let creator = t.client.get_pool(&pool_id).unwrap().creator;
+    t.client.settle_pool(&creator, &pool_id, &0u32);
+
+    // Each winner claims in rapid succession; verify per-claim consistency.
+    let mut total_paid = 0i128;
+    for (idx, w) in winners.iter().enumerate() {
+        let winnings = t.client.claim_winnings(w, &pool_id);
+        assert_eq!(
+            winnings, expected_payout,
+            "every winner with an equal stake gets an equal payout"
+        );
+        assert_eq!(
+            token_client.balance(w),
+            expected_payout,
+            "winner token balance equals payout"
+        );
+        total_paid += winnings;
+
+        // Escrow must always cover what is still owed; never negative.
+        let escrow = token_client.balance(&contract_addr);
+        assert!(escrow >= 0, "escrow balance must never go negative");
+
+        // Bet record removed → claim status reflects AlreadyClaimed.
+        assert_eq!(
+            t.client.get_claim_status(&pool_id, w),
+            ClaimStatus::AlreadyClaimed,
+            "claimed winner #{} must be marked AlreadyClaimed",
+            idx
+        );
+    }
+
+    // Losers cannot claim anything.
+    for l in &losers {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            t.client.claim_winnings(l, &pool_id);
+        }));
+        assert!(result.is_err(), "loser claim must panic");
+    }
+
+    // Conservation: payouts + treasury == total pool (no tokens created/lost).
+    let treasury = t.client.get_treasury_balance();
+    assert_eq!(
+        total_paid + treasury,
+        total_pool,
+        "sum of payouts plus treasury must equal the total staked"
+    );
+    assert!(treasury >= fee, "treasury holds at least the protocol fee");
+    assert!(
+        treasury <= fee + (num_winners as i128 - 1),
+        "treasury must not exceed fee plus bounded rounding dust"
+    );
+}
+
+/// L2: Settle and claim in rapid succession across many winners.
+///
+/// All winners claim immediately after settlement with no ledger advance
+/// between calls. The first claim credits the protocol fee exactly once; the
+/// final claim sweeps rounding dust. State (payout-state accounting, treasury,
+/// escrow) is asserted after each claim.
+#[test]
+fn l2_settle_and_claim_rapid_succession() {
+    let t = setup_multi_user();
+    let pool_id = make_pool_mu(&t);
+    let token_client = soroban_sdk::token::Client::new(&t.env, &t.token);
+    let contract_addr = t._contract_id.clone();
+
+    // Uneven stakes to force integer-division rounding dust.
+    let winners: alloc::vec::Vec<(Address, i128)> = (0..5)
+        .map(|i| (Address::generate(&t.env), 100i128 + (i as i128) * 37))
+        .collect();
+    let loser = Address::generate(&t.env);
+    let loser_bet = 333i128;
+
+    let mut total_a = 0i128;
+    for (w, stake) in &winners {
+        mint(&t.env, &t.token, w, *stake);
+        t.client
+            .place_bet(w, &pool_id, &0u32, stake, &None::<Address>);
+        total_a += *stake;
+    }
+    mint(&t.env, &t.token, &loser, loser_bet);
+    t.client
+        .place_bet(&loser, &pool_id, &1u32, &loser_bet, &None::<Address>);
+
+    let total_pool = total_a + loser_bet;
+    let fee = (total_pool * 200) / 10_000;
+    let net = total_pool - fee;
+
+    expire_mu(&t.env);
+    let creator = t.client.get_pool(&pool_id).unwrap().creator;
+
+    // Settle, then immediately claim — no ledger advance in between.
+    t.client.settle_pool(&creator, &pool_id, &0u32);
+
+    let mut total_paid = 0i128;
+    let mut claimed_winning_stake = 0i128;
+    let n = winners.len();
+    for (idx, (w, stake)) in winners.iter().enumerate() {
+        let winnings = t.client.claim_winnings(w, &pool_id);
+        let expected = (*stake * net) / total_a;
+        assert_eq!(winnings, expected, "payout #{} must be proportional", idx);
+        total_paid += winnings;
+        claimed_winning_stake += *stake;
+
+        // After the first claim the protocol fee must already be credited.
+        let payout_state = t
+            .client
+            .get_pool_payout_state(&pool_id)
+            .expect("payout state must exist after first claim");
+        assert!(
+            payout_state.fee_credited,
+            "fee must be credited on/after the first claim"
+        );
+        assert_eq!(
+            payout_state.claimed_winning_stake, claimed_winning_stake,
+            "claimed winning stake accumulates exactly"
+        );
+
+        let escrow = token_client.balance(&contract_addr);
+        assert!(escrow >= 0, "escrow must never be negative mid-claim");
+
+        if idx == n - 1 {
+            // Final claim sweeps dust: payouts + treasury == pool exactly.
+            let treasury = t.client.get_treasury_balance();
+            assert_eq!(
+                total_paid + treasury,
+                total_pool,
+                "after the final claim, payouts + treasury must equal the pool"
+            );
+            // The treasury accrual (fee + dust) is an on-chain counter that
+            // stays in the contract escrow until withdrawn, so the remaining
+            // escrow must equal exactly the treasury balance — nothing stranded.
+            assert_eq!(
+                token_client.balance(&contract_addr),
+                treasury,
+                "escrow must equal the treasury balance once all winners claim"
+            );
+        }
+    }
+
+    // Double-claim is impossible — the bet record is gone.
+    let first_winner = winners[0].0.clone();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        t.client.claim_winnings(&first_winner, &pool_id);
+    }));
+    assert!(result.is_err(), "re-claiming after payout must panic");
+}
+
+/// L3: Rapid interleaved bets from many users keep per-user and pool state
+/// consistent, and `claim_all_winnings` batches payouts consistently.
+///
+/// 12 users bet repeatedly in an interleaved sequence on the same pool. After
+/// settlement the winners claim via `claim_all_winnings`; the batch's reported
+/// amounts must match each winner's proportional share and the conservation
+/// invariant (payouts + treasury == pool) must hold.
+#[test]
+fn l3_rapid_interleaved_bets_then_batch_claim_consistent() {
+    let t = setup_multi_user();
+    let pool_id = make_pool_mu(&t);
+    let token_client = soroban_sdk::token::Client::new(&t.env, &t.token);
+
+    let num_users = 12usize;
+    let users: alloc::vec::Vec<Address> =
+        (0..num_users).map(|_| Address::generate(&t.env)).collect();
+    for u in &users {
+        mint(&t.env, &t.token, u, 10_000);
+    }
+
+    // Each user bets twice; even-indexed users back A (winners), odd back B.
+    // Track expected per-user winning stake on outcome A.
+    let mut expected_a_stake: alloc::vec::Vec<i128> = alloc::vec![0i128; num_users];
+    let mut running_a = 0i128;
+    let mut running_b = 0i128;
+    for round in 0..2u32 {
+        for (i, u) in users.iter().enumerate() {
+            let outcome = (i % 2) as u32; // 0 = A, 1 = B
+            let amount = 10i128 + (i as i128) * 5 + (round as i128) * 3;
+            t.client
+                .place_bet(u, &pool_id, &outcome, &amount, &None::<Address>);
+            if outcome == 0 {
+                running_a += amount;
+                expected_a_stake[i] += amount;
+            } else {
+                running_b += amount;
+            }
+
+            // Verify pool totals and the user's own record stay consistent.
+            let pool = t.client.get_pool(&pool_id).unwrap();
+            assert_eq!(pool.total_a, running_a, "total_a running sum");
+            assert_eq!(pool.total_b, running_b, "total_b running sum");
+
+            let bet = t.client.get_user_bet(&pool_id, u).unwrap();
+            assert_eq!(
+                bet.amount_a + bet.amount_b,
+                bet.total_bet,
+                "user amount_a + amount_b must equal total_bet"
+            );
+        }
+    }
+
+    assert_eq!(
+        t.client.get_pool(&pool_id).unwrap().participant_count,
+        num_users as u32,
+        "participant_count must equal the number of unique users"
+    );
+
+    let total_a = running_a;
+    let total_pool = running_a + running_b;
+    let fee = (total_pool * 200) / 10_000;
+    let net = total_pool - fee;
+
+    expire_mu(&t.env);
+    let creator = t.client.get_pool(&pool_id).unwrap().creator;
+    t.client.settle_pool(&creator, &pool_id, &0u32);
+
+    // Winners (even indices) batch-claim. claim_all_winnings takes a Vec<u32>.
+    let mut total_paid = 0i128;
+    for (i, u) in users.iter().enumerate() {
+        if i % 2 != 0 {
+            continue; // odd users are losers
+        }
+        let mut ids = Vec::new(&t.env);
+        ids.push_back(pool_id);
+        let entries = t.client.claim_all_winnings(u, &ids);
+        assert_eq!(entries.len(), 1, "one entry per claimable pool");
+        let entry = entries.get(0).unwrap();
+        let expected = (expected_a_stake[i] * net) / total_a;
+        assert_eq!(
+            entry.amount, expected,
+            "batch claim payout for user #{} must be proportional",
+            i
+        );
+        // Even-indexed winners only ever staked on outcome A, so their balance
+        // is the initial mint minus what they escrowed plus the payout.
+        assert_eq!(
+            token_client.balance(u),
+            10_000 - expected_a_stake[i] + expected,
+            "winner balance reflects escrowed stake plus payout"
+        );
+        total_paid += entry.amount;
+    }
+
+    let treasury = t.client.get_treasury_balance();
+    assert_eq!(
+        total_paid + treasury,
+        total_pool,
+        "payouts plus treasury must equal the total staked (conservation)"
+    );
+}
+
+/// L4: Leaderboard returns entries sorted by total bet descending.
+///
+/// Five users bet different amounts on the same pool. `get_leaderboard`
+/// must return them ordered by total_bet from highest to lowest.
+#[test]
+fn l4_leaderboard_ordered_by_total_bet_descending() {
+    let t = setup_multi_user();
+    let pool_id = make_pool_mu(&t);
+
+    let users: alloc::vec::Vec<Address> = (0..5).map(|_| Address::generate(&t.env)).collect();
+    let amounts = [1000i128, 500i128, 2000i128, 750i128, 1500i128];
+
+    for (user, &amount) in users.iter().zip(amounts.iter()) {
+        mint(&t.env, &t.token, user, amount);
+        t.client
+            .place_bet(user, &pool_id, &0u32, &amount, &None::<Address>);
+    }
+
+    let leaderboard = t.client.get_leaderboard(&pool_id, &50u32, &None::<Address>);
+
+    assert_eq!(leaderboard.len(), 5, "all five users must appear");
+
+    let expected_order = [2000i128, 1500i128, 1000i128, 750i128, 500i128];
+    for i in 0..leaderboard.len() {
+        assert_eq!(
+            leaderboard.get(i).unwrap().total_bet,
+            expected_order[i as usize],
+            "entry #{} must have correct total_bet",
+            i
+        );
+    }
+}
+
+/// L5: Leaderboard cursor pagination skips entries before the cursor.
+///
+/// After fetching the top 2 entries, pass the last user address as cursor
+/// to get the remaining 3 entries.
+#[test]
+fn l5_leaderboard_cursor_pagination() {
+    let t = setup_multi_user();
+    let pool_id = make_pool_mu(&t);
+
+    let users: alloc::vec::Vec<Address> = (0..5).map(|_| Address::generate(&t.env)).collect();
+    let amounts = [1000i128, 500i128, 2000i128, 750i128, 1500i128];
+
+    for (user, &amount) in users.iter().zip(amounts.iter()) {
+        mint(&t.env, &t.token, user, amount);
+        t.client
+            .place_bet(user, &pool_id, &0u32, &amount, &None::<Address>);
+    }
+
+    // Fetch top 2.
+    let page1 = t.client.get_leaderboard(&pool_id, &2u32, &None::<Address>);
+    assert_eq!(page1.len(), 2, "page 1 must have 2 entries");
+    assert_eq!(page1.get(0).unwrap().total_bet, 2000i128);
+    assert_eq!(page1.get(1).unwrap().total_bet, 1500i128);
+
+    // Fetch remaining with cursor = last user from page 1.
+    let cursor = page1.get(1).unwrap().user.clone();
+    let page2 = t.client.get_leaderboard(&pool_id, &50u32, &Some(cursor));
+    assert_eq!(page2.len(), 3, "page 2 must have the remaining 3 entries");
+    assert_eq!(page2.get(0).unwrap().total_bet, 1000i128);
+    assert_eq!(page2.get(1).unwrap().total_bet, 750i128);
+    assert_eq!(page2.get(2).unwrap().total_bet, 500i128);
+}
+
+/// L6: Leaderboard limit is capped at 50.
+///
+/// Even if a pool has many participants, requesting limit > 50 should
+/// return at most 50 entries.
+#[test]
+fn l6_leaderboard_limit_capped_at_fifty() {
+    let t = setup_multi_user();
+    let pool_id = make_pool_mu(&t);
+
+    let num_users = 60usize;
+    let users: alloc::vec::Vec<Address> =
+        (0..num_users).map(|_| Address::generate(&t.env)).collect();
+
+    for user in &users {
+        mint(&t.env, &t.token, user, 100);
+        t.client
+            .place_bet(user, &pool_id, &0u32, &100i128, &None::<Address>);
+    }
+
+    let leaderboard = t
+        .client
+        .get_leaderboard(&pool_id, &100u32, &None::<Address>);
+    assert_eq!(
+        leaderboard.len(),
+        50,
+        "leaderboard must be capped at 50 entries"
+    );
 }

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import React from 'react';
-import { NetworkMismatchWarning } from '../../app/components/NetworkMismatchWarning';
+import { NetworkMismatchWarning } from '@/components/NetworkMismatchWarning';
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -81,7 +81,7 @@ describe('NetworkMismatchWarning', () => {
     await waitFor(() => expect(switchBtn).toBeDisabled());
   });
 
-  it('does not render when there is no mismatch', () => {
+  it('does not render when there is no mismatch', async () => {
     const { useNetworkMismatch } = vi.mocked(
       await import('../../lib/hooks/useNetworkMismatch')
     );

@@ -44,12 +44,12 @@ const mockWallet = {
   disconnect: vi.fn(),
 };
 
-vi.mock('../../app/components/WalletAdapterProvider', () => ({
+vi.mock('@/components/WalletAdapterProvider', () => ({
   useWallet: vi.fn(() => mockWallet),
   WalletAdapterProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
-vi.mock('../../app/components/StacksProvider', () => ({
+vi.mock('@/components/StacksProvider', () => ({
   useStacks: vi.fn(() => ({
     userData: null,
     authenticate: vi.fn(),
@@ -68,11 +68,11 @@ vi.mock('../../app/lib/hooks/useWalletConnect', () => ({
 
 // ── UI / layout mocks ─────────────────────────────────────────────────────────
 
-vi.mock('../../app/components/Navbar', () => ({
+vi.mock('@/components/Navbar', () => ({
   default: () => <nav data-testid="navbar" />,
 }));
 
-vi.mock('../../app/components/AuthGuard', () => ({
+vi.mock('@/components/AuthGuard', () => ({
   default: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
@@ -88,11 +88,26 @@ vi.mock('../../app/lib/hooks/useMarketDiscovery', () => ({
     isLoading: false,
     error: null,
     blockHeightWarning: null,
-    filters: { search: '', status: 'all', sortBy: 'newest' },
+    filters: {
+      search: '',
+      status: 'all',
+      asset: 'all',
+      minVolume: '',
+      maxVolume: '',
+      timeRange: 'all',
+      sortBy: 'newest',
+    },
+    assetOptions: ['STX'],
+    hasActiveFilters: false,
     pagination: { page: 1, totalPages: 1, total: 0, pageSize: 12 },
     setSearch: vi.fn(),
     setStatusFilter: vi.fn(),
+    setAssetFilter: vi.fn(),
+    setMinVolume: vi.fn(),
+    setMaxVolume: vi.fn(),
+    setTimeRange: vi.fn(),
     setSortBy: vi.fn(),
+    resetFilters: vi.fn(),
     setPage: vi.fn(),
     retry: vi.fn(),
     filteredMarkets: [],
@@ -159,23 +174,23 @@ vi.mock('../../app/components/DisputeManagement', () => ({
   default: () => <div data-testid="dispute-management" />,
 }));
 
-vi.mock('../../app/components/SearchBar', () => ({
+vi.mock('@/components/SearchBar', () => ({
   default: () => <input data-testid="search-bar" />,
 }));
 
-vi.mock('../../app/components/FilterControls', () => ({
+vi.mock('@/components/FilterControls', () => ({
   default: () => <div data-testid="filter-controls" />,
 }));
 
-vi.mock('../../app/components/SortControls', () => ({
+vi.mock('@/components/SortControls', () => ({
   default: () => <div data-testid="sort-controls" />,
 }));
 
-vi.mock('../../app/components/MarketGrid', () => ({
+vi.mock('@/components/MarketGrid', () => ({
   default: () => <div data-testid="market-grid" />,
 }));
 
-vi.mock('../../app/components/Pagination', () => ({
+vi.mock('@/components/Pagination', () => ({
   default: () => <div data-testid="pagination" />,
 }));
 
@@ -265,7 +280,7 @@ import IncentivesPage from '../../app/incentives/page';
 
 // ── Smoke suite ───────────────────────────────────────────────────────────────
 
-import * as WalletAdapterProvider from '../../app/components/WalletAdapterProvider';
+import * as WalletAdapterProvider from '@/components/WalletAdapterProvider';
 
 const connectedWallet = {
   chain: 'stacks' as const,
@@ -325,11 +340,11 @@ describe('Route smoke tests', () => {
     expect(screen.getByRole('main')).toBeInTheDocument();
   });
 
-  it('/markets/[id] renders without crashing (loading state)', () => {
+  it('/markets/[id] renders without crashing (loading state)', async () => {
     // Params resolve asynchronously; the page shows a loading skeleton first.
     renderWithProviders(
       <PoolDetailPage params={Promise.resolve({ id: '1' })} />
     );
-    expect(screen.getByRole('main')).toBeInTheDocument();
+    expect(await screen.findByRole('main')).toBeInTheDocument();
   });
 });

@@ -1,8 +1,10 @@
 'use client';
+import { createScopedLogger } from '@/app/lib/logger';
+const log = createScopedLogger('PoolIntegration');
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { useWallet } from './WalletAdapterProvider';
+import { useWallet } from '@/components/WalletAdapterProvider';
 import { useNetworkMismatch } from '@/lib/hooks/useNetworkMismatch';
 import { Loader2, AlertCircle, CheckCircle, TrendingUp, Users, RefreshCw } from 'lucide-react';
 import { formatDisplayAddress } from '../lib/address-display';
@@ -49,7 +51,7 @@ export default function PoolIntegration() {
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch pools');
-      console.error('Error fetching pools:', err);
+      log.error('Error fetching pools:', err);
     } finally {
       setIsLoading(false);
     }

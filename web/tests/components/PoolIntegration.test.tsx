@@ -3,13 +3,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import PoolIntegration from '../../app/components/PoolIntegration';
-import * as WalletAdapterProvider from '../../app/components/WalletAdapterProvider';
+import * as WalletAdapterProvider from '@/components/WalletAdapterProvider';
 import * as StacksApi from '../../app/lib/stacks-api';
 import * as NetworkMismatch from '../../lib/hooks/useNetworkMismatch';
 import { renderWithProviders } from '../helpers/renderWithProviders';
 
 // Mock WalletAdapterProvider hook
-vi.mock('../../app/components/WalletAdapterProvider', () => ({
+vi.mock('@/components/WalletAdapterProvider', () => ({
   useWallet: vi.fn(),
   WalletAdapterProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));

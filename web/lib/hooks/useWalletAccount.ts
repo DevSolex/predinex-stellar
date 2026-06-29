@@ -2,6 +2,9 @@
 import { useWallet } from '../../app/components/WalletAdapterProvider';
 import { useQuery } from '@tanstack/react-query';
 import { getRuntimeConfig } from '../../app/lib/runtime-config';
+import { createScopedLogger } from '../../app/lib/logger';
+
+const log = createScopedLogger('useWalletAccount');
 
 interface WalletAccountData {
   address: string | null;
@@ -30,7 +33,7 @@ export function useWalletAccount(): WalletAccountData {
       try {
         const response = await fetch(`${horizonUrl}/accounts/${address}`);
         if (!response.ok) {
-          console.error('Failed to fetch balance:', response.statusText);
+          log.error(`Failed to fetch balance: ${response.statusText}`);
           return '0';
         }
         const data = await response.json();
@@ -40,7 +43,7 @@ export function useWalletAccount(): WalletAccountData {
         );
         return nativeBalance ? (parseFloat(nativeBalance.balance)).toFixed(7) : '0';
       } catch (error) {
-        console.error('Error fetching balance:', error);
+        log.error('Error fetching balance', error);
         return '0';
       }
     },

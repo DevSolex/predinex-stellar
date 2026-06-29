@@ -20,6 +20,9 @@ import {
   notifyPoolSettled,
   notifyPayoutClaimed,
 } from './webhook-service';
+import { createScopedLogger } from './logger';
+
+const log = createScopedLogger('soroban-event-service');
 
 // ---------------------------------------------------------------------------
 // Event schema version (issue #175)
@@ -49,7 +52,7 @@ export interface SorobanEventServiceConfig {
 // Raw Soroban event shapes (from RPC getEvents response)
 // ---------------------------------------------------------------------------
 
-interface RawSorobanEvent {
+export interface RawSorobanEvent {
   /** Hex-encoded ledger sequence + tx index, used as a stable ID */
   id: string;
   /** Ledger close time as Unix timestamp (seconds) */
@@ -78,6 +81,9 @@ interface GetEventsResponse {
 // Typed event payloads (after decoding)
 // ---------------------------------------------------------------------------
 
+/**
+ * Names of contract events the SDK can decode from Soroban event logs.
+ */
 export type SorobanEventName =
   | 'create_pool'
   | 'place_bet'
@@ -86,6 +92,9 @@ export type SorobanEventName =
   | 'fee_collected'
   | 'treasury_withdrawal';
 
+/**
+ * Normalized, typed shape of a decoded Soroban contract event.
+ */
 export interface DecodedSorobanEvent {
   name: SorobanEventName;
   /** Schema version of the event payload (issue #175). */
@@ -146,10 +155,12 @@ function toString(raw: unknown): string | undefined {
 /**
  * Decode a raw Soroban event into a typed DecodedSorobanEvent.
  *
- * Returns `null` if the event name is unrecognised, topics are malformed, or
- * the schema version at topic position 1 does not match
+ * Only decodes events matching the contract's current
  * `SUPPORTED_EVENT_SCHEMA_VERSION`. Skipped events are logged so operators
  * can detect a contract upgrade that the frontend has not caught up with.
+ *
+ * @param raw - Raw event payload from the Soroban RPC `getEvents` response
+ * @returns The decoded event, or null if unrecognized or schema-mismatched
  */
 export function decodeSorobanEvent(raw: RawSorobanEvent): DecodedSorobanEvent | null {
   const topics = raw.topic ?? [];
@@ -163,8 +174,8 @@ export function decodeSorobanEvent(raw: RawSorobanEvent): DecodedSorobanEvent | 
   // shape may have changed — refuse to decode rather than mis-decode.
   const schemaVersion = toString(topics[1]);
   if (schemaVersion !== SUPPORTED_EVENT_SCHEMA_VERSION) {
-    console.warn(
-      `[soroban-event-service] Skipping ${name} event with unsupported schema version "${schemaVersion ?? 'missing'}" (decoder pinned to "${SUPPORTED_EVENT_SCHEMA_VERSION}")`
+    log.warn(
+      `Skipping ${name} event with unsupported schema version "${schemaVersion ?? 'missing'}" (decoder pinned to "${SUPPORTED_EVENT_SCHEMA_VERSION}")`
     );
     return null;
   }
@@ -247,6 +258,10 @@ export function decodeSorobanEvent(raw: RawSorobanEvent): DecodedSorobanEvent | 
 /**
  * Maps a decoded Soroban event to the ActivityItem UI model.
  * Returns null for event types that don't map to a user-visible activity.
+ *
+ * @param event - Decoded Soroban event to map
+ * @param explorerUrl - Base URL used to build the transaction explorer link
+ * @returns The corresponding ActivityItem, or null if not user-visible
  */
 export function mapEventToActivityItem(
   event: DecodedSorobanEvent,
@@ -398,6 +413,7 @@ async function triggerWebhookNotification(event: DecodedSorobanEvent): Promise<v
  * @param userAddress - Stellar address (G... strkey) of the user
  * @param limit       - Maximum number of activity items to return
  * @param config      - Injectable service config (enables test isolation)
+ * @returns Array of activity items, newest first; empty array on missing config or fetch failure
  */
 export async function getUserActivityFromSoroban(
   userAddress: string,
@@ -440,14 +456,14 @@ export async function getUserActivityFromSoroban(
     });
 
     if (!response.ok) {
-      console.error(`Soroban RPC error: ${response.status}`);
+      log.error(`Soroban RPC error: ${response.status}`);
       return [];
     }
 
     const json: GetEventsResponse = await response.json();
 
     if (json.error) {
-      console.error('Soroban RPC returned error:', json.error.message);
+      log.error('Soroban RPC returned error', json.error.message);
       return [];
     }
 
@@ -476,8 +492,8 @@ export async function getUserActivityFromSoroban(
 
       // Send webhook notifications (fire-and-forget, don't block activity feed)
       // Issue #314: webhook notifications for pool events
-      triggerWebhookNotification(decoded).catch(err => 
-        console.warn('[soroban-event-service] Webhook notification failed:', err)
+      triggerWebhookNotification(decoded).catch(err =>
+        log.warn(`Webhook notification failed: ${err instanceof Error ? err.message : err}`)
       );
     }
 
@@ -486,7 +502,7 @@ export async function getUserActivityFromSoroban(
 
     return items.slice(0, limit);
   } catch (e) {
-    console.error('Failed to fetch Soroban activity events:', e);
+    log.error('Failed to fetch Soroban activity events', e);
     return [];
   }
 }

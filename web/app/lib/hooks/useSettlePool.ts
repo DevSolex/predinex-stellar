@@ -3,7 +3,7 @@
 import { useCallback, useState } from 'react';
 import { useToast } from '@/providers/ToastProvider';
 import { predinexContract } from '../adapters/predinex-contract';
-import { useWallet } from '../../components/WalletAdapterProvider';
+import { useWallet } from '@/components/WalletAdapterProvider';
 import { TxStage } from '../soroban-transaction-service';
 
 export type SettleTxStatus = 'pending' | 'success' | 'failed';

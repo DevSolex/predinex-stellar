@@ -1,4 +1,6 @@
 'use client';
+import { createScopedLogger } from '@/app/lib/logger';
+const log = createScopedLogger('useActiveBets');
 
 import { useState, useCallback } from 'react';
 import { UserBet } from '../dashboard-types';
@@ -47,7 +49,7 @@ export function useActiveBets(userAddress: string | null | undefined): UseActive
       userDashboardCache.set(userAddress, bets, REFRESH_INTERVAL_MS);
     } catch (e) {
       setError('Failed to load active positions. Please try again.');
-      console.error('useActiveBets error:', e);
+      log.error('useActiveBets error:', e);
     } finally {
       setIsLoading(false);
     }

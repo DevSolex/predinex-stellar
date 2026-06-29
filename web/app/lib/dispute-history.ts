@@ -12,6 +12,9 @@
  */
 
 import { SUPPORTED_EVENT_SCHEMA_VERSION, type SorobanEventServiceConfig } from './soroban-event-service';
+import { createScopedLogger } from '@/app/lib/logger';
+
+const log = createScopedLogger('dispute-history');
 
 export type DisputeEventType = 'frozen' | 'disputed' | 'unfrozen' | 'resolved';
 
@@ -174,7 +177,7 @@ export async function getDisputeHistoryFromSoroban(
     });
 
     if (!response.ok) {
-      console.error(`[dispute-history] Soroban RPC error: ${response.status}`);
+      log.error(`[dispute-history] Soroban RPC error: ${response.status}`);
       return [];
     }
 
@@ -184,7 +187,7 @@ export async function getDisputeHistoryFromSoroban(
     };
 
     if (json.error) {
-      console.error('[dispute-history] Soroban RPC returned error:', json.error.message);
+      log.error('[dispute-history] Soroban RPC returned error:', json.error.message);
       return [];
     }
 
@@ -198,7 +201,7 @@ export async function getDisputeHistoryFromSoroban(
 
     return buildDisputeTimeline(decoded);
   } catch (e) {
-    console.error('[dispute-history] Failed to fetch dispute events:', e);
+    log.error('[dispute-history] Failed to fetch dispute events:', e);
     return [];
   }
 }

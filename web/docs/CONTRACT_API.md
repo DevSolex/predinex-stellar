@@ -36,6 +36,41 @@ Places a bet on an active pool.
     -- place_bet --user <ACCOUNT> --pool_id 1 --outcome 0 --amount 10000000
   ```
 
+### `cancel_bet`
+Cancels part (or all) of a previously placed bet while the pool is open and not expired.
+- **Signature**: `pub fn cancel_bet(env: Env, user: Address, pool_id: u32, outcome: u32, amount: i128) -> Result<i128, ContractError>`
+- **Parameters**:
+  - `env`: Soroban environment
+  - `user`: Address that placed the bet (only the bettor may cancel their own position)
+  - `pool_id`: The ID of the pool
+  - `outcome`: The outcome index the stake is on (e.g., 0 for Yes, 1 for No)
+  - `amount`: Amount to cancel; must be `> 0` and `<=` the user's stake on `outcome`
+- **Returns**: `i128` (amount refunded)
+- **Behavior**: Refunds `amount` to the caller, reduces the outcome total and the user's position, and leaves `participant_count` unchanged. Any non-zero remaining stake must still satisfy the per-pool min/max bet limits. Emits `bet_cancelled`.
+- **Errors**: `PoolNotFound`, `PoolNotOpen`, `PoolExpired`, `InvalidOutcome`, `InvalidBetAmount`, `NoBetFound`, `BetBelowMinBet`, `BetAboveMaxBet`.
+- **Example**:
+  ```bash
+  stellar contract invoke --id <ID> --source <ACCOUNT> --network testnet \
+    -- cancel_bet --user <ACCOUNT> --pool_id 1 --outcome 0 --amount 5000000
+  ```
+
+### `extend_pool_duration`
+Extends an open pool's duration before it expires. Only the pool creator may call this.
+- **Signature**: `pub fn extend_pool_duration(env: Env, creator: Address, pool_id: u32, additional_seconds: u64) -> Result<u64, ContractError>`
+- **Parameters**:
+  - `env`: Soroban environment
+  - `creator`: The pool creator
+  - `pool_id`: The ID of the pool
+  - `additional_seconds`: Seconds to add to the current expiry; must be `> 0`
+- **Returns**: `u64` (the pool's new expiry timestamp)
+- **Behavior**: Pushes `pool.expiry` out by `additional_seconds`, capped so total lifetime never exceeds `MAX_POOL_DURATION_SECS` (1,000,000 s) from creation. Pool must be `Open` and not yet expired. Emits `pool_duration_extended`.
+- **Errors**: `PoolNotFound`, `Unauthorized`, `PoolNotOpen`, `PoolExpired`, `DurationTooShort`, `DurationTooLong`, `ExpiryOverflow`.
+- **Example**:
+  ```bash
+  stellar contract invoke --id <ID> --source <ACCOUNT> --network testnet \
+    -- extend_pool_duration --creator <ACCOUNT> --pool_id 1 --additional_seconds 3600
+  ```
+
 ### `settle_pool`
 Settles a pool by declaring the winning outcome.
 - **Signature**: `pub fn settle_pool(env: Env, caller: Address, pool_id: u32, winning_outcome: u32) -> Result<(), ContractError>`

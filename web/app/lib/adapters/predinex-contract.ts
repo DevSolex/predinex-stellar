@@ -1,12 +1,8 @@
 /**
- * Write-side adapter: Stacks Connect contract calls for the Predinex pool contract.
- * Keeps `openContractCall`, Clarity encoding, and contract identity out of UI components.
+ * Write-side adapter: Soroban contract calls for the Predinex pool contract.
+ * Keeps wallet prompt details, argument encoding, and contract identity out of UI components.
  */
-import { openContractCall } from '@stacks/connect';
-import type { Finished } from '@stacks/connect';
-import { uintCV, stringAsciiCV } from '@stacks/transactions';
 import { getRuntimeConfig } from '../runtime-config';
-import { callContract } from '../../../lib/appkit-transactions';
 import { SorobanTransactionService, TxStage } from '../soroban-transaction-service';
 import { FreighterWalletClient } from '../freighter-adapter';
 
@@ -21,77 +17,6 @@ function getSorobanService() {
 }
 
 export const predinexContract = {
-  /**
-   * Submit a `place-bet` contract call (wallet prompt).
-   */
-  async placeBet(params: {
-    poolId: number;
-    outcome: number;
-    amountMicroStx: number;
-    onFinish?: Finished;
-    onCancel?: () => void;
-  }): Promise<void> {
-    const { contract } = getRuntimeConfig();
-    await openContractCall({
-      contractAddress: contract.address,
-      contractName: contract.name,
-      functionName: 'place-bet',
-      functionArgs: [uintCV(params.poolId), uintCV(params.outcome), uintCV(params.amountMicroStx)],
-      onFinish: params.onFinish,
-      onCancel: params.onCancel,
-    });
-  },
-
-  /**
-   * Submit a `claim-winnings` contract call via the shared AppKit/network-aware path.
-   */
-  async claimWinnings(params: {
-    poolId: number;
-    onFinish?: Finished;
-    onCancel?: () => void;
-  }): Promise<void> {
-    const cfg = getRuntimeConfig();
-    const { contract } = cfg;
-    await callContract({
-      contractAddress: contract.address,
-      contractName: contract.name,
-      functionName: 'claim-winnings',
-      functionArgs: [uintCV(params.poolId)],
-      network: cfg.network,
-      onFinish: params.onFinish,
-      onCancel: params.onCancel,
-    });
-  },
-
-  /**
-   * Submit a `create-pool` contract call (wallet prompt).
-   */
-  async createMarket(params: {
-    title: string;
-    description: string;
-    outcomeA: string;
-    outcomeB: string;
-    durationSeconds: number;
-    onFinish?: Finished;
-    onCancel?: () => void;
-  }): Promise<void> {
-    const { contract } = getRuntimeConfig();
-    await openContractCall({
-      contractAddress: contract.address,
-      contractName: contract.name,
-      functionName: 'create-pool',
-      functionArgs: [
-        stringAsciiCV(params.title),
-        stringAsciiCV(params.description),
-        stringAsciiCV(params.outcomeA),
-        stringAsciiCV(params.outcomeB),
-        uintCV(params.durationSeconds),
-      ],
-      onFinish: params.onFinish,
-      onCancel: params.onCancel,
-    });
-  },
-
   /**
    * Submit a `create_pool` Soroban contract call (wallet prompt).
    */
@@ -164,6 +89,24 @@ export const predinexContract = {
 
   /**
    * Submit a `set_pool_bet_limits` Soroban contract call (admin/treasury).
+   *
+   * @param params.wallet - Connected Freighter wallet client
+   * @param params.poolId - ID of the pool to update
+   * @param params.minBetStroops - New minimum bet size, in stroops
+   * @param params.maxBetStroops - New maximum bet size, in stroops
+   * @param params.onStageChange - Optional callback for transaction stage updates
+   * @param params.onFeeEstimated - Optional callback to approve/reject the estimated fee
+   * @returns The transaction hash
+   *
+   * @example
+   * ```ts
+   * const { txHash } = await predinexContract.setPoolBetLimitsSoroban({
+   *   wallet,
+   *   poolId: 12,
+   *   minBetStroops: 1_000_000,
+   *   maxBetStroops: 100_000_000,
+   * });
+   * ```
    */
   async setPoolBetLimitsSoroban(params: {
     wallet: FreighterWalletClient;
@@ -219,7 +162,54 @@ export const predinexContract = {
   },
 
   /**
-   * Submit a `settle_pool` Soroban contract call (wallet prompt).
+   * Submit a `claim_all_winnings` Soroban contract call batching up to 20
+   * pools in a single transaction (wallet prompt).
+   */
+  async claimAllWinningsSoroban(params: {
+    wallet: FreighterWalletClient;
+    poolIds: number[];
+    onStageChange?: (stage: TxStage) => void;
+    onFeeEstimated?: (feeStroops: string) => Promise<boolean>;
+  }): Promise<{ txHash: string; claimedPoolIds: number[] }> {
+    const { soroban } = getRuntimeConfig();
+    const service = getSorobanService();
+
+    const result = await service.claimAllWinnings(
+      params.wallet,
+      soroban.contractId,
+      { poolIds: params.poolIds },
+      params.onStageChange,
+      params.onFeeEstimated
+    );
+
+    if (result.status === 'FAILED') {
+      throw new Error(result.error || 'Transaction failed');
+    }
+
+    // Which pools actually paid out (the contract skips non-claimable ones).
+    const claimedPoolIds = SorobanTransactionService.decodeClaimedPoolIds(result.returnValue);
+
+    return { txHash: result.txHash, claimedPoolIds };
+  },
+
+  /**
+   * Submit a `settle_pool` Soroban contract call (admin/treasury).
+   *
+   * @param params.wallet - Connected Freighter wallet client
+   * @param params.poolId - ID of the pool being settled
+   * @param params.winningOutcome - Index of the outcome declared as the winner (0 or 1)
+   * @param params.onStageChange - Optional callback for transaction stage updates
+   * @param params.onFeeEstimated - Optional callback to approve/reject the estimated fee
+   * @returns The transaction hash
+   *
+   * @example
+   * ```ts
+   * const { txHash } = await predinexContract.settlePoolSoroban({
+   *   wallet,
+   *   poolId: 12,
+   *   winningOutcome: 0,
+   * });
+   * ```
    */
   async settlePoolSoroban(params: {
     wallet: FreighterWalletClient;

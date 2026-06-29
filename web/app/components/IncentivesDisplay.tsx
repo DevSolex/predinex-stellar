@@ -1,11 +1,13 @@
 'use client';
+import { createScopedLogger } from '@/app/lib/logger';
+const log = createScopedLogger('IncentivesDisplay');
 
 import { useState, useEffect, useCallback } from 'react';
 import { useIncentives } from '../lib/hooks/useIncentives';
-import { useWallet } from './WalletAdapterProvider';
+import { useWallet } from '@/components/WalletAdapterProvider';
 import { getStacksCoreApiBaseUrl, predinexReadApi } from '../lib/adapters/predinex-read-api';
 import { calculateTotalIncentive, DEFAULT_INCENTIVE_CONFIG, BetterIncentive } from '../lib/liquidity-incentives';
-import { TOKEN_SYMBOL } from '../lib/formatting';
+import { TOKEN_SYMBOL } from '@/lib/formatting';
 import { Gift, TrendingUp, Award, Zap } from 'lucide-react';
 
 interface IncentivesDisplayProps {
@@ -35,7 +37,7 @@ async function fetchIncentivesFromContract(userAddress: string): Promise<Contrac
     for (const tx of results) {
       if (tx.contract_call?.function_name === 'claim-incentive') {
         const args = tx.contract_call.function_args || [];
-        const poolId = args.find((a: any) => a.name === 'pool-id')?.repr?.replace('u', '') || '0';
+        const poolId = args.find((a: { name: string; repr?: string }) => a.name === 'pool-id')?.repr?.replace('u', '') || '0';
         
         incentives.push({
           poolId: parseInt(poolId),
@@ -51,7 +53,7 @@ async function fetchIncentivesFromContract(userAddress: string): Promise<Contrac
     
     return incentives;
   } catch (error) {
-    console.error('Failed to fetch incentives from contract:', error);
+    log.error('Failed to fetch incentives from contract:', error);
     return [];
   }
 }
@@ -89,7 +91,7 @@ async function calculateRealIncentives(userAddress: string, poolId: number): Pro
       status: 'pending'
     }];
   } catch (error) {
-    console.error('Failed to calculate incentives:', error);
+    log.error('Failed to calculate incentives:', error);
     return [];
   }
 }
@@ -127,7 +129,7 @@ export default function IncentivesDisplay({ betterId, poolId }: IncentivesDispla
           setIncentives(allIncentives);
         }
       } catch (error) {
-        console.error('Error loading incentives:', error);
+        log.error('Error loading incentives:', error);
       } finally {
         setIsLoading(false);
       }
@@ -140,7 +142,7 @@ export default function IncentivesDisplay({ betterId, poolId }: IncentivesDispla
     try {
       await claimIncentive(incentiveId);
     } catch (error) {
-      console.error('Failed to claim incentive:', error);
+      log.error('Failed to claim incentive:', error);
     }
   }, [claimIncentive]);
 

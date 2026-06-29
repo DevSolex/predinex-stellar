@@ -4,6 +4,9 @@ import { useAppKitNetwork } from '@reown/appkit/react';
 import { getRuntimeConfig } from '@/app/lib/runtime-config';
 import { stellarNetworks } from '@/lib/appkit-config';
 import { useCallback, useMemo } from 'react';
+import { createScopedLogger } from '@/app/lib/logger';
+
+const log = createScopedLogger('useNetworkMismatch');
 
 /**
  * Hook to detect if the connected wallet is on a different network than what the app expects.
@@ -32,7 +35,7 @@ export function useNetworkMismatch() {
     try {
       await (switchNetwork as unknown as (n: typeof targetNetwork) => Promise<void>)(targetNetwork);
     } catch (error) {
-      console.error('Failed to switch network:', error);
+      log.error('Failed to switch network', error);
       throw error;
     }
   }, [expectedNetworkType, switchNetwork]);

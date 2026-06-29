@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { ArrowUpRight, ArrowDownLeft, Shield } from 'lucide-react';
+import RouteErrorBoundary from '../../components/RouteErrorBoundary';
 import { ICON_CLASS } from '../lib/constants';
 import { exportRecords } from '../lib/export';
 
@@ -115,6 +116,7 @@ export default function TransactionsPage() {
 
   return (
     <main className="min-h-screen pt-24 pb-16 px-4">
+      <RouteErrorBoundary routeName="Transactions">
       <div className="max-w-6xl mx-auto">
         <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
           <div>
@@ -225,6 +227,7 @@ export default function TransactionsPage() {
           )}
         </div>
       </div>
+      </RouteErrorBoundary>
     </main>
   );
 }

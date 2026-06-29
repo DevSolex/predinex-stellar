@@ -1,6 +1,6 @@
 'use client';
 
-import { useWallet } from '../app/components/WalletAdapterProvider';
+import { useWallet } from '@/components/WalletAdapterProvider';
 import { Wallet } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useToast } from '../providers/ToastProvider';

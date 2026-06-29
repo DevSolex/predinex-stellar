@@ -4,7 +4,7 @@ import { useCallback, useState } from 'react';
 import { useToast } from '@/providers/ToastProvider';
 import { predinexContract } from '../adapters/predinex-contract';
 import { invalidateOnClaimWinnings } from '../cache-invalidation';
-import { useWallet } from '../../components/WalletAdapterProvider';
+import { useWallet } from '@/components/WalletAdapterProvider';
 import { TxStage } from '../soroban-transaction-service';
 import { notifyBrowserEvent } from '../notifications';
 

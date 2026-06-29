@@ -12,7 +12,7 @@ import {
   MAX_OUTCOME_LENGTH,
   MIN_POOL_DURATION_SECS,
   MAX_POOL_DURATION_SECS,
-} from '../../app/lib/validators';
+} from '../../lib/validators';
 
 describe('validateContractId', () => {
   it('accepts a valid mainnet contract identifier', () => {

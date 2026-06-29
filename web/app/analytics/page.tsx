@@ -1,6 +1,6 @@
 'use client';
 
-import Navbar from '../components/Navbar';
+import Navbar from '@/components/Navbar';
 import RouteErrorBoundary from '../../components/RouteErrorBoundary';
 import Card from '../../components/ui/Card';
 import { useAnalytics } from '../lib/hooks/useAnalytics';
