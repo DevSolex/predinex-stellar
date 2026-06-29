@@ -73,7 +73,7 @@ export default function CreateMarket() {
     setIsSubmitting(true);
     setStage('idle');
     try {
-      const { txHash } = await predinexContract.createMarketSoroban({
+      const { txHash, poolId } = await predinexContract.createMarketSoroban({
         wallet,
         title: wizard.draft.title,
         description: wizard.draft.description,
@@ -87,6 +87,24 @@ export default function CreateMarket() {
           });
         },
       });
+
+      // #721 — If any extended metadata fields are filled and we decoded the pool ID,
+      // submit them as a second transaction (best-effort, non-blocking on error).
+      const { resolutionCriteria, externalLinks, coverImage } = wizard.draft;
+      if (poolId && (resolutionCriteria || externalLinks || coverImage)) {
+        try {
+          await predinexContract.setPoolExtMetadataSoroban({
+            wallet,
+            poolId,
+            resolutionCriteria: resolutionCriteria || undefined,
+            externalLinks: externalLinks || undefined,
+            coverImage: coverImage || undefined,
+          });
+        } catch (metaError) {
+          log.warn('Extended metadata submission failed (non-fatal):', metaError);
+          showToast('Pool created — metadata could not be saved.', 'error');
+        }
+      }
 
       setTxId(txHash);
       wizard.resetDraft();

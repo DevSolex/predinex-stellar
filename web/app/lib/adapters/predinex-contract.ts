@@ -5,6 +5,7 @@
 import { getRuntimeConfig } from '../runtime-config';
 import { SorobanTransactionService, TxStage } from '../soroban-transaction-service';
 import { FreighterWalletClient } from '../freighter-adapter';
+import { scValToNative } from '@stellar/stellar-sdk';
 
 let sorobanService: SorobanTransactionService | null = null;
 
@@ -51,7 +52,19 @@ export const predinexContract = {
       throw new Error(result.error || 'Transaction failed');
     }
 
-    return { txHash: result.txHash };
+    let poolId: number | undefined;
+    try {
+      if (result.returnValue) {
+        const decoded = scValToNative(result.returnValue);
+        if (typeof decoded === 'number' || typeof decoded === 'bigint') {
+          poolId = Number(decoded);
+        }
+      }
+    } catch {
+      // best-effort; extended metadata call will be skipped if poolId is unavailable
+    }
+
+    return { txHash: result.txHash, poolId };
   },
 
   /**
@@ -225,6 +238,42 @@ export const predinexContract = {
       params.wallet,
       soroban.contractId,
       { poolId: params.poolId, winningOutcome: params.winningOutcome },
+      params.onStageChange,
+      params.onFeeEstimated
+    );
+
+    if (result.status === 'FAILED') {
+      throw new Error(result.error || 'Transaction failed');
+    }
+
+    return { txHash: result.txHash };
+  },
+
+  /**
+   * Submit a `set_pool_ext_metadata` Soroban contract call.
+   * Only the pool creator can call this, and only before the first bet is placed.
+   */
+  async setPoolExtMetadataSoroban(params: {
+    wallet: FreighterWalletClient;
+    poolId: number;
+    resolutionCriteria?: string;
+    externalLinks?: string;
+    coverImage?: string;
+    onStageChange?: (stage: TxStage) => void;
+    onFeeEstimated?: (feeStroops: string) => Promise<boolean>;
+  }): Promise<{ txHash: string }> {
+    const { soroban } = getRuntimeConfig();
+    const service = getSorobanService();
+
+    const result = await service.setPoolExtMetadata(
+      params.wallet,
+      soroban.contractId,
+      {
+        poolId: params.poolId,
+        resolutionCriteria: params.resolutionCriteria,
+        externalLinks: params.externalLinks,
+        coverImage: params.coverImage,
+      },
       params.onStageChange,
       params.onFeeEstimated
     );

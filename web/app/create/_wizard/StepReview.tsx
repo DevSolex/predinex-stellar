@@ -60,6 +60,19 @@ export function StepReview({ draft, walletAddress, onEdit }: StepReviewProps) {
             onEdit={() => onEdit(2)}
           />
         )}
+        {draft.resolutionCriteria && (
+          <SummaryRow
+            label="Resolution criteria"
+            value={draft.resolutionCriteria}
+            onEdit={() => onEdit(1)}
+          />
+        )}
+        {draft.externalLinks && (
+          <SummaryRow label="External links" value={draft.externalLinks} onEdit={() => onEdit(2)} />
+        )}
+        {draft.coverImage && (
+          <SummaryRow label="Cover image" value={draft.coverImage} onEdit={() => onEdit(1)} />
+        )}
       </div>
 
       <div>

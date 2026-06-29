@@ -421,6 +421,66 @@ export class SorobanTransactionService {
     return this.executeWithFeePrompt(tx, wallet, onStageChange, onFeeEstimated);
   }
 
+  /**
+   * Calls `set_pool_ext_metadata` to store optional extended metadata for a pool.
+   * Only callable by the pool creator before the first bet is placed.
+   */
+  async setPoolExtMetadata(
+    wallet: FreighterWalletClient,
+    contractId: string,
+    params: {
+      poolId: number;
+      resolutionCriteria?: string;
+      externalLinks?: string;
+      coverImage?: string;
+    },
+    onStageChange?: (stage: TxStage) => void,
+    onFeeEstimated?: (feeStroops: string) => Promise<boolean>,
+  ): Promise<SorobanTxResult> {
+    if (!wallet.address) throw new Error("Wallet not connected");
+
+    const contract = new Contract(contractId);
+    const sourceAccount = await this.server.getAccount(wallet.address);
+
+    const metadataMap = xdr.ScVal.scvMap([
+      new xdr.ScMapEntry({
+        key: nativeToScVal("resolution_criteria"),
+        val: params.resolutionCriteria
+          ? xdr.ScVal.scvVec([xdr.ScVal.scvSymbol("Some"), nativeToScVal(params.resolutionCriteria)])
+          : xdr.ScVal.scvVec([xdr.ScVal.scvSymbol("None")]),
+      }),
+      new xdr.ScMapEntry({
+        key: nativeToScVal("external_links"),
+        val: params.externalLinks
+          ? xdr.ScVal.scvVec([xdr.ScVal.scvSymbol("Some"), nativeToScVal(params.externalLinks)])
+          : xdr.ScVal.scvVec([xdr.ScVal.scvSymbol("None")]),
+      }),
+      new xdr.ScMapEntry({
+        key: nativeToScVal("cover_image"),
+        val: params.coverImage
+          ? xdr.ScVal.scvVec([xdr.ScVal.scvSymbol("Some"), nativeToScVal(params.coverImage)])
+          : xdr.ScVal.scvVec([xdr.ScVal.scvSymbol("None")]),
+      }),
+    ]);
+
+    const tx = new TransactionBuilder(sourceAccount, {
+      fee: "1000",
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        contract.call(
+          "set_pool_ext_metadata",
+          new Address(wallet.address).toScVal(),
+          nativeToScVal(params.poolId, { type: "u32" }),
+          metadataMap,
+        ),
+      )
+      .setTimeout(30)
+      .build();
+
+    return this.executeWithFeePrompt(tx, wallet, onStageChange, onFeeEstimated);
+  }
+
   private async pollForSuccess(txHash: string): Promise<SorobanTxResult> {
     let attempts = 0;
     while (attempts < 20) {

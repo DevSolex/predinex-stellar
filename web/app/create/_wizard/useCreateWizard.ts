@@ -4,7 +4,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { useLocalStorage } from '../../lib/hooks/useLocalStorage';
 import { validateField, validatePoolCreationForm } from '@/lib/validators';
 
-export const CREATE_MARKET_DRAFT_KEY = 'predinex_create_market_draft_v1';
+export const CREATE_MARKET_DRAFT_KEY = 'predinex_create_market_draft_v2';
 
 export interface CreateMarketDraft {
   title: string;
@@ -14,6 +14,12 @@ export interface CreateMarketDraft {
   duration: string;
   category: string;
   referenceLink: string;
+  /** #721 — How the pool outcome will be determined (Markdown supported). */
+  resolutionCriteria: string;
+  /** #721 — Pipe-separated list of reference URLs (up to 5). */
+  externalLinks: string;
+  /** #721 — URL of a cover image shown on pool cards/detail page. */
+  coverImage: string;
 }
 
 export const EMPTY_DRAFT: CreateMarketDraft = {
@@ -24,6 +30,9 @@ export const EMPTY_DRAFT: CreateMarketDraft = {
   duration: '',
   category: 'crypto',
   referenceLink: '',
+  resolutionCriteria: '',
+  externalLinks: '',
+  coverImage: '',
 };
 
 export type FormErrors = Partial<Record<keyof CreateMarketDraft, string>>;

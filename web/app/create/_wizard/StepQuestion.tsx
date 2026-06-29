@@ -149,6 +149,41 @@ export function StepQuestion({
           </div>
         ))}
       </div>
+
+      {/* Resolution Criteria */}
+      <div>
+        <label htmlFor="resolutionCriteria" className="block text-sm font-medium mb-1">
+          Resolution criteria <span className="text-muted-foreground font-normal">(optional)</span>
+        </label>
+        <textarea
+          id="resolutionCriteria"
+          name="resolutionCriteria"
+          rows={3}
+          value={draft.resolutionCriteria}
+          onChange={onChange}
+          placeholder="Describe exactly what determines each outcome. Markdown supported."
+          className="w-full px-4 py-2 rounded-lg bg-background border border-input focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none"
+        />
+        <p className="mt-1 text-xs text-muted-foreground">
+          Immutable once the first bet is placed.
+        </p>
+      </div>
+
+      {/* Cover Image */}
+      <div>
+        <label htmlFor="coverImage" className="block text-sm font-medium mb-1">
+          Cover image URL <span className="text-muted-foreground font-normal">(optional)</span>
+        </label>
+        <input
+          id="coverImage"
+          name="coverImage"
+          type="url"
+          value={draft.coverImage}
+          onChange={onChange}
+          placeholder="https://example.com/image.png"
+          className="w-full px-4 py-2 rounded-lg bg-background border border-input focus:outline-none focus:ring-2 focus:ring-primary/50"
+        />
+      </div>
     </div>
   );
 }

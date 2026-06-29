@@ -212,6 +212,9 @@ pub enum DataKey {
     /// #625 — Pending rescue request waiting out the 24-hour timelock.
     /// Value: (token: Address, to: Address, amount: i128, not_before: u64)
     PendingRescue,
+    /// #721 — Optional extended pool metadata (resolution criteria, links, cover image).
+    /// Immutable after the first bet is placed.
+    PoolExtMetadata(u32),
 }
 
 // #189 — TTL bump policy for persistent storage entries.
@@ -504,6 +507,24 @@ pub struct PoolInfo {
     pub name: String,
     pub description: String,
 }
+
+/// #721 — Optional extended pool metadata stored separately from the core Pool
+/// struct. All fields are optional. Once any bet has been placed on the pool,
+/// this record becomes immutable to prevent manipulation.
+#[derive(Clone)]
+#[contracttype]
+pub struct PoolExtendedMetadata {
+    /// Long-form description / terms in plain text (Markdown accepted by the UI).
+    pub resolution_criteria: Option<String>,
+    /// Pipe-separated list of external reference URLs (max 5, each max 500 bytes).
+    pub external_links: Option<String>,
+    /// URL of a cover image shown on pool cards and the detail page.
+    pub cover_image: Option<String>,
+}
+
+const MAX_RESOLUTION_CRITERIA_LENGTH: u32 = 2_000;
+const MAX_EXTERNAL_LINKS_LENGTH: u32 = 2_500;
+const MAX_COVER_IMAGE_URL_LENGTH: u32 = 500;
 
 /// #680 — A single entry in a pool's leaderboard.
 #[derive(Clone)]
@@ -5170,6 +5191,70 @@ impl PredinexContract {
                 );
             }
         }
+        Ok(())
+    }
+
+    /// #721 — Read the extended metadata for a pool. Returns `None` when no
+    /// extended metadata has been stored for the given pool.
+    pub fn get_pool_ext_metadata(env: Env, pool_id: u32) -> Option<PoolExtendedMetadata> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PoolExtMetadata(pool_id))
+    }
+
+    /// #721 — Write extended metadata for a pool. Only the pool creator may
+    /// call this function. The record is immutable once the first bet has been
+    /// placed (i.e. `pool.total_a + pool.total_b > 0`).
+    pub fn set_pool_ext_metadata(
+        env: Env,
+        creator: Address,
+        pool_id: u32,
+        metadata: PoolExtendedMetadata,
+    ) -> Result<(), ContractError> {
+        creator.require_auth();
+        let pool: Pool = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Pool(pool_id))
+            .ok_or(ContractError::PoolNotFound)?;
+        if creator != pool.creator {
+            return Err(ContractError::Unauthorized);
+        }
+        // Lock metadata once any bet has been placed.
+        if pool.total_a > 0 || pool.total_b > 0 {
+            return Err(ContractError::PoolAlreadySettled);
+        }
+        if let Some(ref rc) = metadata.resolution_criteria {
+            if rc.len() > MAX_RESOLUTION_CRITERIA_LENGTH {
+                return Err(ContractError::DescriptionTooLong);
+            }
+        }
+        if let Some(ref links) = metadata.external_links {
+            if links.len() > MAX_EXTERNAL_LINKS_LENGTH {
+                return Err(ContractError::DescriptionTooLong);
+            }
+        }
+        if let Some(ref img) = metadata.cover_image {
+            if img.len() > MAX_COVER_IMAGE_URL_LENGTH {
+                return Err(ContractError::DescriptionTooLong);
+            }
+        }
+        env.storage()
+            .persistent()
+            .set(&DataKey::PoolExtMetadata(pool_id), &metadata);
+        env.storage().persistent().extend_ttl(
+            &DataKey::PoolExtMetadata(pool_id),
+            POOL_BUMP_THRESHOLD,
+            POOL_BUMP_TARGET,
+        );
+        env.events().publish(
+            (
+                Symbol::new(&env, "pool_ext_metadata_set"),
+                event_version(&env),
+                pool_id,
+            ),
+            creator,
+        );
         Ok(())
     }
 

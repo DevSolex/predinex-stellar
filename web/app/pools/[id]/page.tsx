@@ -7,12 +7,13 @@ import { use, useEffect, useState, useCallback } from "react";
 import { useWallet } from '@/components/WalletAdapterProvider';
 import { predinexReadApi } from "../../lib/adapters/predinex-read-api";
 import type { Pool } from "../../lib/adapters/types";
+import type { PoolExtendedMetadata } from "../../lib/soroban-read-api";
 import Navbar from '@/components/Navbar';
 import CountdownTimer from '@/components/CountdownTimer';
 import { fetchCurrentBlockHeightLive } from "../../lib/market-utils";
 import { blocksToSeconds } from "../../lib/countdown-utils";
 import ClaimWinningsButton from "../../../components/ClaimWinningsButton";
-import { AlertCircle, RefreshCw, Users, TrendingUp, Clock, Wallet } from "lucide-react";
+import { AlertCircle, RefreshCw, Users, TrendingUp, Clock, Wallet, ExternalLink } from "lucide-react";
 import { TruncatedAddress } from "../../../components/TruncatedAddress";
 
 function LoadingSkeleton() {
@@ -48,6 +49,7 @@ export default function PoolDetail({ params }: { params: Promise<{ id: string }>
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [userBet, setUserBet] = useState<{ amountA: number; amountB: number } | null>(null);
+    const [extMetadata, setExtMetadata] = useState<PoolExtendedMetadata | null>(null);
 
     const fetchPool = useCallback(async () => {
         try {
@@ -91,6 +93,13 @@ export default function PoolDetail({ params }: { params: Promise<{ id: string }>
         load();
         return () => { cancelled = true; };
     }, [fetchPool]);
+
+    // #721 — Fetch extended metadata once on mount (best-effort).
+    useEffect(() => {
+        predinexReadApi.getPoolExtMetadata(poolId)
+            .then(meta => { if (meta) setExtMetadata(meta); })
+            .catch(() => {});
+    }, [poolId]);
 
     useEffect(() => {
         fetchUserBet();
@@ -275,6 +284,47 @@ export default function PoolDetail({ params }: { params: Promise<{ id: string }>
                             </div>
                         </div>
                     </div>
+
+                    {/* #721 — Extended metadata */}
+                    {extMetadata && (extMetadata.resolutionCriteria || extMetadata.externalLinks || extMetadata.coverImage) && (
+                        <div className="bg-muted/30 p-4 rounded-xl mb-8 space-y-4">
+                            {extMetadata.coverImage && (
+                                <img
+                                    src={extMetadata.coverImage}
+                                    alt="Pool cover"
+                                    className="w-full h-40 object-cover rounded-lg"
+                                />
+                            )}
+                            {extMetadata.resolutionCriteria && (
+                                <div>
+                                    <h3 className="text-sm font-semibold mb-1">Resolution Criteria</h3>
+                                    <p className="text-sm text-muted-foreground whitespace-pre-wrap">{extMetadata.resolutionCriteria}</p>
+                                </div>
+                            )}
+                            {extMetadata.externalLinks && (
+                                <div>
+                                    <h3 className="text-sm font-semibold mb-1">Reference Links</h3>
+                                    <div className="flex flex-wrap gap-2">
+                                        {extMetadata.externalLinks.split('|').map((url, i) => {
+                                            const trimmed = url.trim();
+                                            return trimmed ? (
+                                                <a
+                                                    key={i}
+                                                    href={trimmed}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    className="flex items-center gap-1 text-xs text-primary hover:underline"
+                                                >
+                                                    <ExternalLink className="w-3 h-3" />
+                                                    {trimmed.replace(/^https?:\/\//, '').split('/')[0]}
+                                                </a>
+                                            ) : null;
+                                        })}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
 
                     {/* User bet position */}
                     {userHasPosition && (

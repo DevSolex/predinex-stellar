@@ -137,6 +137,14 @@ export default function MarketCard({ market }: MarketCardProps) {
           </label>
 
           {/* Title and Description */}
+          {market.coverImage && (
+            <img
+              src={market.coverImage}
+              alt=""
+              aria-hidden="true"
+              className="w-full h-28 object-cover rounded-lg mb-3"
+            />
+          )}
           <h3 className="text-lg sm:text-xl font-bold mb-2 group-hover:text-primary transition-colors line-clamp-2">
             {market.title}
           </h3>
