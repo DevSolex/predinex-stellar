@@ -13,7 +13,8 @@ import CountdownTimer from '@/components/CountdownTimer';
 import { fetchCurrentBlockHeightLive } from "../../lib/market-utils";
 import { blocksToSeconds } from "../../lib/countdown-utils";
 import ClaimWinningsButton from "../../../components/ClaimWinningsButton";
-import { AlertCircle, RefreshCw, Users, TrendingUp, Clock, Wallet, ExternalLink } from "lucide-react";
+import PoolExportButton from "../../../components/PoolExportButton";
+import { AlertCircle, RefreshCw, Users, TrendingUp, Clock, Wallet, ExternalLink, Printer } from "lucide-react";
 import { TruncatedAddress } from "../../../components/TruncatedAddress";
 
 function LoadingSkeleton() {
@@ -200,11 +201,20 @@ export default function PoolDetail({ params }: { params: Promise<{ id: string }>
                             <h1 className="text-3xl font-bold">{pool.title}</h1>
                             <p className="text-muted-foreground mt-1">{pool.description}</p>
                         </div>
-                        <span className={`px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap ${
-                            pool.settled ? 'bg-zinc-800 text-zinc-400' : 'bg-green-500/10 text-green-500'
-                        }`}>
-                            {pool.settled ? 'Settled' : pool.status === 'expired' ? 'Expired' : 'Active'}
-                        </span>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                            <span className={`px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap ${
+                                pool.settled ? 'bg-zinc-800 text-zinc-400' : 'bg-green-500/10 text-green-500'
+                            }`}>
+                                {pool.settled ? 'Settled' : pool.status === 'expired' ? 'Expired' : 'Active'}
+                            </span>
+                            {/* #722 — Export pool data */}
+                            <PoolExportButton
+                                pool={pool}
+                                poolId={poolId}
+                                isCreator={stxAddress === pool.creator}
+                                walletAddress={stxAddress}
+                            />
+                        </div>
                     </div>
 
                     {/* Stats */}
@@ -328,11 +338,23 @@ export default function PoolDetail({ params }: { params: Promise<{ id: string }>
 
                     {/* User bet position */}
                     {userHasPosition && (
-                        <div className="mb-8 p-4 bg-primary/10 border border-primary/20 rounded-xl">
-                            <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
-                                <Wallet className="w-4 h-4" />
-                                Your Position
-                            </h3>
+                        <div className="mb-8 p-4 bg-primary/10 border border-primary/20 rounded-xl print:border-black print:bg-white" id="bet-receipt">
+                            <div className="flex justify-between items-center mb-3">
+                                <h3 className="text-lg font-semibold flex items-center gap-2">
+                                    <Wallet className="w-4 h-4" />
+                                    Your Position
+                                </h3>
+                                {/* #722 — Printable bet receipt */}
+                                <button
+                                    type="button"
+                                    onClick={() => window.print()}
+                                    className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors print:hidden"
+                                    aria-label="Print bet receipt"
+                                >
+                                    <Printer className="w-3 h-3" />
+                                    Print receipt
+                                </button>
+                            </div>
                             <div className="grid grid-cols-2 gap-4">
                                 <div className={`p-3 rounded-lg ${userBet!.amountA > 0 ? 'bg-green-500/10 border border-green-500/20' : 'bg-muted/50'}`}>
                                     <p className="text-sm text-muted-foreground">{pool.outcomeA}</p>
