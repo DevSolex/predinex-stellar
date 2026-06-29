@@ -55,6 +55,86 @@ export const predinexContract = {
   },
 
   /**
+   * Submit a `create_multi_outcome_pool` Soroban contract call (wallet prompt).
+   */
+  async createMultiOutcomePoolSoroban(params: {
+    wallet: FreighterWalletClient;
+    title: string;
+    description: string;
+    outcomes: string[];
+    durationSeconds: number;
+    metadataUri?: string | null;
+    onStageChange?: (stage: TxStage) => void;
+    onFeeEstimated?: (feeStroops: string) => Promise<boolean>;
+  }): Promise<{ txHash: string }> {
+    const { soroban } = getRuntimeConfig();
+    const service = getSorobanService();
+
+    const result = await service.createMultiOutcomePool(
+      params.wallet,
+      soroban.contractId,
+      {
+        title: params.title,
+        description: params.description,
+        outcomes: params.outcomes,
+        duration: params.durationSeconds,
+        metadataUri: params.metadataUri,
+      },
+      params.onStageChange,
+      params.onFeeEstimated
+    );
+
+    if (result.status === 'FAILED') {
+      throw new Error(result.error || 'Transaction failed');
+    }
+
+    return { txHash: result.txHash };
+  },
+
+  /**
+   * Submit a `create_pool_from_template` Soroban contract call (wallet prompt).
+   */
+  async createPoolFromTemplateSoroban(params: {
+    wallet: FreighterWalletClient;
+    templateId: number;
+    overrides: {
+      title?: string;
+      description?: string;
+      outcomes?: string[];
+      durationSeconds?: number;
+      metadataUri?: string | null;
+    };
+    onStageChange?: (stage: TxStage) => void;
+    onFeeEstimated?: (feeStroops: string) => Promise<boolean>;
+  }): Promise<{ txHash: string }> {
+    const { soroban } = getRuntimeConfig();
+    const service = getSorobanService();
+
+    const result = await service.createPoolFromTemplate(
+      params.wallet,
+      soroban.contractId,
+      {
+        templateId: params.templateId,
+        overrides: {
+          title: params.overrides.title,
+          description: params.overrides.description,
+          outcomes: params.overrides.outcomes,
+          duration: params.overrides.durationSeconds,
+          metadataUri: params.overrides.metadataUri,
+        },
+      },
+      params.onStageChange,
+      params.onFeeEstimated
+    );
+
+    if (result.status === 'FAILED') {
+      throw new Error(result.error || 'Transaction failed');
+    }
+
+    return { txHash: result.txHash };
+  },
+
+  /**
    * Submit a `place_bet` Soroban contract call (wallet prompt).
    */
   async placeBetSoroban(params: {
