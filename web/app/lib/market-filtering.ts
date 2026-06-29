@@ -17,7 +17,7 @@ export const DEFAULT_MARKET_FILTERS: MarketFilters = {
   sortBy: 'newest',
 };
 
-const STATUS_VALUES = new Set<MarketStatusFilter>(['all', 'open', 'settled', 'disputed']);
+const STATUS_VALUES = new Set<MarketStatusFilter>(['all', 'open', 'settled', 'disputed', 'frozen']);
 const SORT_VALUES = new Set<SortOption>(['newest', 'ending-soon', 'volume', 'participants']);
 const TIME_RANGE_VALUES = new Set<TimeRangeFilter>([
   'all',
@@ -108,7 +108,9 @@ function matchesStatus(market: ProcessedMarket, status: MarketStatusFilter): boo
   if (status === 'all') return true;
   if (status === 'open') return market.status === 'active';
   if (status === 'settled') return market.status === 'settled';
-  return market.disputed === true;
+  if (status === 'frozen') return market.status === 'frozen';
+  if (status === 'disputed') return market.status === 'disputed';
+  return false;
 }
 
 function matchesTimeRange(market: ProcessedMarket, timeRange: TimeRangeFilter, nowSeconds: number): boolean {

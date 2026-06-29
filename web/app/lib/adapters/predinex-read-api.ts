@@ -11,7 +11,7 @@ import {
   getUserBetFromSoroban,
   getPoolCountFromSoroban,
   getPoolBetLimitsFromSoroban,
-  getPoolExtMetadataFromSoroban,
+  getFreezeAdminFromSoroban,
   type Pool,
   type UserBetData,
 } from "../soroban-read-api";
@@ -123,16 +123,10 @@ async function getPoolCount(): Promise<number> {
 }
 
 /**
- * #721 — Fetch optional extended metadata for a pool.
- * Returns null when no metadata has been stored or the read fails.
+ * Get freeze admin address from Soroban.
  */
-async function getPoolExtMetadata(poolId: number): Promise<ReturnType<typeof getPoolExtMetadataFromSoroban>> {
-  try {
-    return await getPoolExtMetadataFromSoroban(poolId);
-  } catch (e) {
-    log.error(`[predinexReadApi] Error fetching ext metadata for pool ${poolId}:`, e);
-    return null;
-  }
+async function getFreezeAdmin(): Promise<string | null> {
+  return getFreezeAdminFromSoroban();
 }
 
 /**
@@ -148,8 +142,8 @@ export const predinexReadApi = {
   getUserBet,
   /** Canonical Soroban read: get total pool count */
   getPoolCount,
-  /** #721 — Canonical Soroban read: get extended pool metadata */
-  getPoolExtMetadata,
+  /** Canonical Soroban read: get freeze admin */
+  getFreezeAdmin,
   /** Canonical Soroban read: get user activity via events */
   getUserActivitySoroban,
   /** Canonical Soroban read: get user activity via events */
