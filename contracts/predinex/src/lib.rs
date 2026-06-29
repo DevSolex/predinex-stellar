@@ -6,6 +6,7 @@ use soroban_sdk::{
 };
 
 mod fuzz_tests;
+mod integration_tests;
 mod multi_user_tests;
 mod pause_tests;
 mod protocol_fee_tests;
