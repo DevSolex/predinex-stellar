@@ -36,6 +36,8 @@ export interface ProcessedMarket {
   participantCount?: number;
   assetType?: string;
   disputed?: boolean;
+  /** #721 — Optional cover image URL stored in extended pool metadata. */
+  coverImage?: string;
 }
 
 export interface MarketFilters {

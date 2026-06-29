@@ -11,6 +11,7 @@ import {
   getUserBetFromSoroban,
   getPoolCountFromSoroban,
   getPoolBetLimitsFromSoroban,
+  getPoolExtMetadataFromSoroban,
   type Pool,
   type UserBetData,
 } from "../soroban-read-api";
@@ -20,6 +21,9 @@ import { getMarkets, getTotalVolume, getUserActivity } from "../stacks-api";
 import { createScopedLogger } from '@/app/lib/logger';
 const log = createScopedLogger('predinexReadApi');
 import type { ActivityItem } from "./types";
+
+/** #721 — Re-export for convenience. */
+export type { PoolExtendedMetadata } from '../soroban-read-api';
 
 /**
  * Get the base URL of the configured Stacks Core API.
@@ -119,6 +123,19 @@ async function getPoolCount(): Promise<number> {
 }
 
 /**
+ * #721 — Fetch optional extended metadata for a pool.
+ * Returns null when no metadata has been stored or the read fails.
+ */
+async function getPoolExtMetadata(poolId: number): Promise<ReturnType<typeof getPoolExtMetadataFromSoroban>> {
+  try {
+    return await getPoolExtMetadataFromSoroban(poolId);
+  } catch (e) {
+    log.error(`[predinexReadApi] Error fetching ext metadata for pool ${poolId}:`, e);
+    return null;
+  }
+}
+
+/**
  * Public read API for the SDK client. Prefers Soroban read paths; retains
  * legacy Stacks delegates for callers still migrating.
  */
@@ -131,6 +148,8 @@ export const predinexReadApi = {
   getUserBet,
   /** Canonical Soroban read: get total pool count */
   getPoolCount,
+  /** #721 — Canonical Soroban read: get extended pool metadata */
+  getPoolExtMetadata,
   /** Canonical Soroban read: get user activity via events */
   getUserActivitySoroban,
   /** Canonical Soroban read: get user activity via events */

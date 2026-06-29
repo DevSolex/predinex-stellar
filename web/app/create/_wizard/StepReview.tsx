@@ -85,6 +85,19 @@ export function StepReview({ draft, walletAddress, onEdit, setField }: StepRevie
         {draft.referenceLink && (
           <SummaryRow label="Reference" value={draft.referenceLink} onEdit={() => onEdit(4)} />
         )}
+        {draft.resolutionCriteria && (
+          <SummaryRow
+            label="Resolution criteria"
+            value={draft.resolutionCriteria}
+            onEdit={() => onEdit(1)}
+          />
+        )}
+        {draft.externalLinks && (
+          <SummaryRow label="External links" value={draft.externalLinks} onEdit={() => onEdit(2)} />
+        )}
+        {draft.coverImage && (
+          <SummaryRow label="Cover image" value={draft.coverImage} onEdit={() => onEdit(1)} />
+        )}
       </div>
 
       <label className="flex items-start gap-3 rounded-xl border border-border p-4 cursor-pointer">

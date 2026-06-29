@@ -869,3 +869,39 @@ export const sorobanReadApi = {
 
 /** Shared pool and bet types used by both legacy Stacks and Soroban read layers. */
 export type { Pool, UserBetData };
+
+// ---------------------------------------------------------------------------
+// #721 — Extended pool metadata
+// ---------------------------------------------------------------------------
+
+/** Decoded extended pool metadata from `get_pool_ext_metadata`. */
+export interface PoolExtendedMetadata {
+  resolutionCriteria?: string;
+  externalLinks?: string;
+  coverImage?: string;
+}
+
+/**
+ * Read optional extended metadata for a pool via `get_pool_ext_metadata`.
+ * Returns null when no metadata is stored or the read fails.
+ */
+export async function getPoolExtMetadataFromSoroban(
+  poolId: number,
+  config?: SorobanReadConfig,
+): Promise<PoolExtendedMetadata | null> {
+  const cfg = config ?? getSorobanConfig();
+  if (!cfg.contractId) return null;
+  try {
+    const rawResult = await simulateContractRead(cfg.rpcUrl, cfg.contractId, 'get_pool_ext_metadata', [poolId]);
+    if (rawResult === null || typeof rawResult !== 'object') return null;
+    const raw = rawResult as Record<string, unknown>;
+    return {
+      resolutionCriteria: typeof raw['resolution_criteria'] === 'string' ? raw['resolution_criteria'] : undefined,
+      externalLinks: typeof raw['external_links'] === 'string' ? raw['external_links'] : undefined,
+      coverImage: typeof raw['cover_image'] === 'string' ? raw['cover_image'] : undefined,
+    };
+  } catch (e) {
+    log.error('Failed to fetch pool ext metadata from Soroban:', e);
+    return null;
+  }
+}

@@ -179,18 +179,21 @@ export function StepParameters({
       </div>
 
       <div>
-        <label htmlFor="referenceLink" className="block text-sm font-medium mb-1">
-          External reference link (optional)
+        <label htmlFor="externalLinks" className="block text-sm font-medium mb-1">
+          External links <span className="text-muted-foreground font-normal">(optional)</span>
         </label>
         <input
-          id="referenceLink"
-          name="referenceLink"
+          id="externalLinks"
+          name="externalLinks"
           type="url"
-          value={draft.referenceLink}
+          value={draft.externalLinks}
           onChange={onChange}
           placeholder="https://example.com/data"
           className="w-full px-4 py-2 rounded-lg bg-background border border-input focus:outline-none focus:ring-2 focus:ring-primary/50"
         />
+        <p className="mt-1 text-xs text-muted-foreground">
+          Reference URLs (pipe-separated for multiple). Immutable once the first bet is placed.
+        </p>
       </div>
 
       <div className="rounded-xl border border-border bg-muted/20 p-4 text-sm space-y-2">

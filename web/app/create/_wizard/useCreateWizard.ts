@@ -24,9 +24,7 @@ import {
 } from './pool-templates';
 import type { OnChainPoolTemplate } from '@/app/lib/soroban-template-api';
 
-export const CREATE_POOL_DRAFT_KEY = 'predinex_create_pool_draft_v2';
-/** @deprecated Use CREATE_POOL_DRAFT_KEY */
-export const CREATE_MARKET_DRAFT_KEY = CREATE_POOL_DRAFT_KEY;
+export const CREATE_MARKET_DRAFT_KEY = 'predinex_create_market_draft_v2';
 
 export type TemplateSource = 'blank' | 'public' | 'saved';
 export type WizardStep = 1 | 2 | 3 | 4 | 5;
@@ -44,7 +42,12 @@ export interface CreatePoolDraft {
   protocolFeeBps: string;
   settlementType: SettlementType;
   referenceLink: string;
-  saveAsTemplate: boolean;
+  /** #721 — How the pool outcome will be determined (Markdown supported). */
+  resolutionCriteria: string;
+  /** #721 — Pipe-separated list of reference URLs (up to 5). */
+  externalLinks: string;
+  /** #721 — URL of a cover image shown on pool cards/detail page. */
+  coverImage: string;
 }
 
 /** @deprecated Use CreatePoolDraft */
@@ -63,7 +66,9 @@ export const EMPTY_DRAFT: CreatePoolDraft = {
   protocolFeeBps: String(DEFAULT_PROTOCOL_FEE_BPS),
   settlementType: 'twap',
   referenceLink: '',
-  saveAsTemplate: false,
+  resolutionCriteria: '',
+  externalLinks: '',
+  coverImage: '',
 };
 
 export type FormErrors = Partial<Record<string, string>>;

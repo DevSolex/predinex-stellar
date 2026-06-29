@@ -124,38 +124,37 @@ export default function CreateMarket() {
     setIsSubmitting(true);
     setStage('idle');
     try {
-      let txHash: string;
+      const { txHash, poolId } = await predinexContract.createMarketSoroban({
+        wallet,
+        title: wizard.draft.title,
+        description: wizard.draft.description,
+        outcomeA: wizard.draft.outcomeA,
+        outcomeB: wizard.draft.outcomeB,
+        durationSeconds: duration,
+        onStageChange: (s) => setStage(s),
+        onFeeEstimated: (fee) => {
+          return new Promise((resolve) => {
+            setFeePrompt({ feeStroops: fee, resolve });
+          });
+        },
+      });
 
-      if (wizard.draft.templateSource === 'public' && wizard.draft.templateId) {
-        const result = await predinexContract.createPoolFromTemplateSoroban({
-          wallet,
-          templateId: Number.parseInt(wizard.draft.templateId, 10),
-          overrides: {
-            title: wizard.draft.title.trim(),
-            description: wizard.draft.description.trim(),
-            outcomes,
-            durationSeconds: duration,
-            metadataUri,
-          },
-          ...txOptions,
-        });
-        txHash = result.txHash;
-      } else {
-        const result = await predinexContract.createMultiOutcomePoolSoroban({
-          wallet,
-          title: wizard.draft.title.trim(),
-          description: wizard.draft.description.trim(),
-          outcomes,
-          durationSeconds: duration,
-          metadataUri,
-          ...txOptions,
-        });
-        txHash = result.txHash;
-      }
-
-      if (wizard.draft.saveAsTemplate) {
-        saveTemplateToLocalStorage(wizard.draft.title, wizard.draft);
-        showToast('Template saved locally for reuse', 'success');
+      // #721 — If any extended metadata fields are filled and we decoded the pool ID,
+      // submit them as a second transaction (best-effort, non-blocking on error).
+      const { resolutionCriteria, externalLinks, coverImage } = wizard.draft;
+      if (poolId && (resolutionCriteria || externalLinks || coverImage)) {
+        try {
+          await predinexContract.setPoolExtMetadataSoroban({
+            wallet,
+            poolId,
+            resolutionCriteria: resolutionCriteria || undefined,
+            externalLinks: externalLinks || undefined,
+            coverImage: coverImage || undefined,
+          });
+        } catch (metaError) {
+          log.warn('Extended metadata submission failed (non-fatal):', metaError);
+          showToast('Pool created — metadata could not be saved.', 'error');
+        }
       }
 
       setTxId(txHash);
