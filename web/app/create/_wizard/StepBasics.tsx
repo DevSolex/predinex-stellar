@@ -1,19 +1,15 @@
 'use client';
 
 import type { ChangeEvent, FocusEvent } from 'react';
-import type { CreateMarketDraft, FormErrors } from './useCreateWizard';
-import { getHelpText } from '@/lib/validators';
+import type { CreatePoolDraft, FormErrors } from './useCreateWizard';
+import { getHelpText, MAX_DESCRIPTION_LENGTH, MAX_TITLE_LENGTH } from '@/lib/validators';
 
-const MAX_TITLE = 100;
-const MAX_DESCRIPTION = 500;
-const MAX_OUTCOME = 50;
-
-interface StepQuestionProps {
-  draft: CreateMarketDraft;
+interface StepBasicsProps {
+  draft: CreatePoolDraft;
   errors: FormErrors;
   touched: Record<string, boolean>;
-  setField: (field: keyof CreateMarketDraft, value: string) => void;
-  blurField: (field: keyof CreateMarketDraft) => void;
+  setField: (field: keyof CreatePoolDraft, value: string | boolean) => void;
+  blurField: (field: keyof CreatePoolDraft) => void;
 }
 
 function charCount(value: string, max: number) {
@@ -30,26 +26,25 @@ function charCount(value: string, max: number) {
   );
 }
 
-export function StepQuestion({
+export function StepBasics({
   draft,
   errors,
   touched,
   setField,
   blurField,
-}: StepQuestionProps) {
-  const onChange = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    setField(e.target.name as keyof CreateMarketDraft, e.target.value);
+}: StepBasicsProps) {
+  const onChange = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
+    setField(e.target.name as keyof CreatePoolDraft, e.target.value);
   };
-  const onBlur = (e: FocusEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    blurField(e.target.name as keyof CreateMarketDraft);
+  const onBlur = (e: FocusEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
+    blurField(e.target.name as keyof CreatePoolDraft);
   };
 
   return (
     <div className="space-y-5">
-      {/* Title */}
       <div>
         <label htmlFor="title" className="block text-sm font-medium mb-1">
-          Question / Title
+          Pool title
         </label>
         <input
           id="title"
@@ -76,11 +71,10 @@ export function StepQuestion({
               {getHelpText('title')}
             </p>
           )}
-          {charCount(draft.title, MAX_TITLE)}
+          {charCount(draft.title, MAX_TITLE_LENGTH)}
         </div>
       </div>
 
-      {/* Description */}
       <div>
         <label htmlFor="description" className="block text-sm font-medium mb-1">
           Description
@@ -88,11 +82,11 @@ export function StepQuestion({
         <textarea
           id="description"
           name="description"
-          rows={3}
+          rows={4}
           value={draft.description}
           onChange={onChange}
           onBlur={onBlur}
-          placeholder="Provide context and resolution criteria for this market."
+          placeholder="Provide context, resolution criteria, and data sources."
           aria-describedby={errors.description ? 'description-error' : 'description-help'}
           aria-invalid={!!errors.description}
           className={`w-full px-4 py-2 rounded-lg bg-background border focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none ${
@@ -109,45 +103,47 @@ export function StepQuestion({
               {getHelpText('description')}
             </p>
           )}
-          {charCount(draft.description, MAX_DESCRIPTION)}
+          {charCount(draft.description, MAX_DESCRIPTION_LENGTH)}
         </div>
       </div>
 
-      {/* Outcomes */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        {(['outcomeA', 'outcomeB'] as const).map((field) => (
-          <div key={field}>
-            <label htmlFor={field} className="block text-sm font-medium mb-1">
-              Outcome {field === 'outcomeA' ? 'A' : 'B'}
-            </label>
-            <input
-              id={field}
-              name={field}
-              type="text"
-              value={draft[field]}
-              onChange={onChange}
-              onBlur={onBlur}
-              placeholder={field === 'outcomeA' ? 'e.g. Yes' : 'e.g. No'}
-              aria-describedby={errors[field] ? `${field}-error` : `${field}-help`}
-              aria-invalid={!!errors[field]}
-              className={`w-full px-4 py-2 rounded-lg bg-background border focus:outline-none focus:ring-2 focus:ring-primary/50 ${
-                touched[field] && errors[field] ? 'border-red-500' : 'border-input'
-              }`}
-            />
-            <div className="flex justify-between items-center mt-1">
-              {errors[field] && touched[field] ? (
-                <p id={`${field}-error`} role="alert" className="text-sm text-red-500">
-                  {errors[field]}
-                </p>
-              ) : (
-                <p id={`${field}-help`} className="text-xs text-muted-foreground">
-                  {getHelpText(field)}
-                </p>
-              )}
-              {charCount(draft[field], MAX_OUTCOME)}
-            </div>
-          </div>
-        ))}
+        <div>
+          <label htmlFor="category" className="block text-sm font-medium mb-1">
+            Category
+          </label>
+          <select
+            id="category"
+            name="category"
+            value={draft.category}
+            onChange={onChange}
+            className="w-full px-4 py-2 rounded-lg bg-background border border-input focus:outline-none focus:ring-2 focus:ring-primary/50"
+          >
+            <option value="crypto">Cryptocurrency</option>
+            <option value="sports">Sports</option>
+            <option value="politics">Politics</option>
+            <option value="tech">Technology</option>
+            <option value="weather">Weather</option>
+            <option value="finance">Finance</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+
+        <div>
+          <label htmlFor="tags" className="block text-sm font-medium mb-1">
+            Tags
+          </label>
+          <input
+            id="tags"
+            name="tags"
+            type="text"
+            value={draft.tags}
+            onChange={onChange}
+            placeholder="weekly, btc, price"
+            className="w-full px-4 py-2 rounded-lg bg-background border border-input focus:outline-none focus:ring-2 focus:ring-primary/50"
+          />
+          <p className="mt-1 text-xs text-muted-foreground">Comma-separated labels for discovery.</p>
+        </div>
       </div>
     </div>
   );

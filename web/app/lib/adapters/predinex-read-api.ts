@@ -14,6 +14,7 @@ import {
   type Pool,
   type UserBetData,
 } from "../soroban-read-api";
+import { getPublicTemplatesFromSoroban } from '../soroban-template-api';
 import { getUserActivityFromSoroban } from "../soroban-event-service";
 import { getMarkets, getTotalVolume, getUserActivity } from "../stacks-api";
 import { createScopedLogger } from '@/app/lib/logger';
@@ -122,6 +123,8 @@ async function getPoolCount(): Promise<number> {
  * legacy Stacks delegates for callers still migrating.
  */
 export const predinexReadApi = {
+  /** Canonical Soroban read: list public pool templates */
+  getPublicTemplates: getPublicTemplatesFromSoroban,
   /** Canonical Soroban read: get pool by ID */
   getPool,
   /** Canonical Soroban read: get user's bet in a pool */
