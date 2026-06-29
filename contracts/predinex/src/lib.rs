@@ -433,6 +433,8 @@ pub enum SettlementSource {
     Creator,
     /// A delegated operator (assigned via `assign_settler`) called `settle_pool`.
     Operator,
+    /// Permissionless settlement of an expired pool.
+    Expired,
 }
 
 /// #396 — Event types that can trigger an off-chain webhook notification.
@@ -920,6 +922,17 @@ pub struct SettlePoolEvent {
     pub fee_amount: i128,
     /// Whether the caller was the pool creator or a delegated operator.
     pub source: SettlementSource,
+}
+
+/// Event payload emitted by `settle_expired_pool`.
+#[derive(Clone)]
+#[contracttype]
+pub struct SettleExpiredEvent {
+    pub caller: Address,
+    pub winning_outcome: u32,
+    pub winning_side_total: i128,
+    pub total_pool_volume: i128,
+    pub fee_amount: i128,
 }
 
 /// #351 — Result of a single pool settlement attempt in a batch call.
@@ -4061,6 +4074,120 @@ impl PredinexContract {
                 total_pool_volume,
                 fee_amount,
                 source,
+            },
+        );
+        Ok(())
+    }
+
+    pub fn settle_expired_pool(
+        env: Env,
+        caller: Address,
+        pool_id: u32,
+    ) -> Result<(), ContractError> {
+        if !Self::is_initialized(&env) {
+            panic_with_error!(&env, ContractError::NotInitialized);
+        }
+        caller.require_auth();
+        Self::require_not_paused(&env)?;
+
+        let mut pool = env
+            .storage()
+            .persistent()
+            .get::<_, Pool>(&DataKey::Pool(pool_id))
+            .ok_or(ContractError::PoolNotFound)?;
+
+        if pool.status != PoolStatus::Open {
+            return Err(ContractError::PoolAlreadySettled);
+        }
+
+        if env.ledger().timestamp() <= pool.expiry {
+            return Err(ContractError::PoolNotExpired);
+        }
+
+        let min_participants = Self::get_min_settlement_participants(env.clone());
+        if pool.participant_count < min_participants {
+            return Err(ContractError::InsufficientParticipants);
+        }
+
+        let totals = Self::read_outcome_totals(&env, pool_id, &pool);
+        let mut winning_outcome = 0;
+        let mut max_total = -1;
+        for i in 0..totals.len() {
+            let total = totals.get(i).unwrap();
+            if total > max_total {
+                max_total = total;
+                winning_outcome = i;
+            }
+        }
+
+        let outcomes = Self::read_outcomes(&env, pool_id, &pool);
+        if winning_outcome >= outcomes.len() {
+            return Err(ContractError::InvalidOutcome);
+        }
+
+        pool.status = PoolStatus::Settled(winning_outcome);
+        pool.settled = true;
+        pool.winning_outcome = Some(winning_outcome);
+
+        let winning_side_total = totals.get(winning_outcome).unwrap();
+        let total_pool_volume = Self::sum_totals(&totals)?;
+        let fee_bps = Self::resolve_fee_bps_for_volume(&env, total_pool_volume);
+        let fee_amount = total_pool_volume
+            .checked_mul(fee_bps as i128)
+            .ok_or(ContractError::PoolTotalOverflow)?
+            / 10000;
+
+        if env.storage().persistent().has(&DataKey::VolumeFeeTiers) {
+            env.storage()
+                .persistent()
+                .set(&DataKey::PoolFeeBps(pool_id), &fee_bps);
+            env.storage().persistent().extend_ttl(
+                &DataKey::PoolFeeBps(pool_id),
+                POOL_BUMP_THRESHOLD,
+                POOL_BUMP_TARGET,
+            );
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Pool(pool_id), &pool);
+        env.storage()
+            .persistent()
+            .set(&DataKey::PoolSettlementProtocolFee(pool_id), &fee_amount);
+        env.storage().persistent().extend_ttl(
+            &DataKey::PoolSettlementProtocolFee(pool_id),
+            POOL_BUMP_THRESHOLD,
+            POOL_BUMP_TARGET,
+        );
+
+        let source = SettlementSource::Expired;
+        env.storage()
+            .persistent()
+            .set(&DataKey::PoolSettlementSource(pool_id), &source);
+        env.storage().persistent().extend_ttl(
+            &DataKey::PoolSettlementSource(pool_id),
+            POOL_BUMP_THRESHOLD,
+            POOL_BUMP_TARGET,
+        );
+
+        env.storage().persistent().extend_ttl(
+            &DataKey::Pool(pool_id),
+            POOL_BUMP_THRESHOLD,
+            POOL_BUMP_TARGET,
+        );
+
+        env.events().publish(
+            (
+                Symbol::new(&env, "SettleExpired"),
+                event_version(&env),
+                pool_id,
+            ),
+            SettleExpiredEvent {
+                caller,
+                winning_outcome,
+                winning_side_total,
+                total_pool_volume,
+                fee_amount,
             },
         );
         Ok(())
