@@ -82,13 +82,17 @@ export class Poller {
   private readonly config: BotConfig;
   private running = false;
   private cycleCount = 0;
-  /** Pool IDs that failed in a previous cycle — tracked for escalation logging */
+  /** Unique instance identifier for multi-instance debugging */
+  private readonly instanceId: string;
+  /** Pool IDs that failed in a previous cycle -- tracked for escalation logging */
   private readonly persistentFailures = new Map<number, number>();
 
   constructor(config: BotConfig) {
     this.config = config;
     this.client = new ContractClient(config);
     this.executor = new Executor(config);
+    // Generate a short instance ID from the bot's public key for logging
+    this.instanceId = config.botSecretKey.slice(0, 8) + "...";
   }
 
   /**
@@ -101,6 +105,7 @@ export class Poller {
 
     logger.info("Starting settlement cycle", {
       cycle: this.cycleCount,
+      instance: this.instanceId,
       dryRun: this.config.dryRun,
       autoSettle: this.config.autoSettleEnabled,
     });
@@ -200,6 +205,13 @@ export class Poller {
       for (const result of results) {
         if (result.success) {
           this.persistentFailures.delete(result.poolId);
+        } else if (result.error?.includes("PoolAlreadySettled")) {
+          // Another instance settled this pool first — not a real failure
+          logger.info("Pool already settled by another instance", {
+            instance: this.instanceId,
+            poolId: result.poolId,
+          });
+          this.persistentFailures.delete(result.poolId);
         } else {
           const prev = this.persistentFailures.get(result.poolId) ?? 0;
           const failCount = prev + 1;
@@ -265,6 +277,7 @@ export class Poller {
 
     this.running = true;
     logger.info("Settlement bot started", {
+      instance: this.instanceId,
       network: this.config.network,
       contractId: this.config.contractId,
       pollIntervalMs: this.config.pollIntervalMs,

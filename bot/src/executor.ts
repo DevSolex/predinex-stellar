@@ -222,10 +222,12 @@ export class Executor {
           baseDelayMs: retryBaseDelayMs,
           label: `settle_pools batch [${batch.map((c) => c.poolId).join(",")}]`,
           // Don't retry simulation errors — they indicate invalid arguments
+          // Don't retry PoolAlreadySettled — another instance settled it first
           shouldRetry: (err) =>
             !String(err).includes("Simulation failed") &&
             !String(err).includes("InvalidOutcome") &&
-            !String(err).includes("PoolNotExpired"),
+            !String(err).includes("PoolNotExpired") &&
+            !String(err).includes("PoolAlreadySettled"),
         },
       );
 

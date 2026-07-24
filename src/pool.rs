@@ -34,6 +34,8 @@ pub enum PoolError {
     NegativeVolume = 6,
     /// Contract not yet initialized.
     NotInitialized = 7,
+    /// Caller is not authorized to perform this action.
+    Unauthorized = 8,
 }
 
 /// A single fee tier: a volume threshold and the corresponding fee in bps.
@@ -58,6 +60,8 @@ pub enum DataKey {
     FeeManager,
     /// List of fee tiers stored in ascending order of `volume_threshold`.
     FeeTiers,
+    /// Address of the pool creator (the only account allowed to modify admin settings).
+    Creator,
 }
 
 /// The pool contract supporting both a flat default fee and volume‑based tiered fees.
@@ -106,11 +110,13 @@ impl Pool {
         }
 
         // ── Write state ──
+        let creator = env.invoker();
         env.storage().instance().set(&DataKey::Initialized, &true);
         env.storage().instance().set(&DataKey::DefaultBps, &default_bps);
         env.storage()
             .instance()
             .set(&DataKey::FeeTiers, &Vec::new(&env));
+        env.storage().instance().set(&DataKey::Creator, &creator);
 
         log!(&env, "info", "Pool initialized with default fee: {} bps", default_bps);
         Ok(())
@@ -138,7 +144,20 @@ impl Pool {
     /// # Events
     ///
     /// Emits `fee_manager_updated` with the new value.
-    pub fn set_fee_manager(env: Env, fee_manager: Option<Address>) {
+    pub fn set_fee_manager(env: Env, fee_manager: Option<Address>) -> Result<(), PoolError> {
+        Self::check_initialized(&env)?;
+
+        let caller = env.invoker();
+        let creator: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Creator)
+            .ok_or(PoolError::NotInitialized)?;
+        if caller != creator {
+            log!(&env, "error", "Unauthorized: only the pool creator can set the fee manager");
+            return Err(PoolError::Unauthorized);
+        }
+
         env.storage()
             .instance()
             .set(&DataKey::FeeManager, &fee_manager);
@@ -147,6 +166,7 @@ impl Pool {
         env.events().publish(event_payload);
 
         log!(&env, "info", "Fee manager set to {:?}", fee_manager);
+        Ok(())
     }
 
     /// Retrieve the current fee manager address.
@@ -217,6 +237,17 @@ impl Pool {
     /// Emits `fee_tiers_updated` with the new list of tiers.
     pub fn set_volume_fee_tiers(env: Env, tiers: Vec<FeeTier>) -> Result<(), PoolError> {
         Self::check_initialized(&env)?;
+
+        let caller = env.invoker();
+        let creator: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Creator)
+            .ok_or(PoolError::NotInitialized)?;
+        if caller != creator {
+            log!(&env, "error", "Unauthorized: only the pool creator can set fee tiers");
+            return Err(PoolError::Unauthorized);
+        }
 
         // ── Validate count ──
         if tiers.len() > MAX_TIERS {
