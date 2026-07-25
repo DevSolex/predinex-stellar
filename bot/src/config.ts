@@ -35,6 +35,18 @@ export interface BotConfig {
   autoSettleEnabled: boolean;
   defaultWinningOutcome: number;
 
+  // Oracle resolution
+  /** Base URL of the external resolution oracle (e.g. https://oracle.example.com). Null = disabled. */
+  oracleUrl: string | null;
+  /** Bearer token sent as Authorization header to the oracle. Null = no auth. */
+  oracleSecret: string | null;
+  /**
+   * When true, pools whose outcome could not be resolved by the oracle or
+   * on-chain data fall back to defaultWinningOutcome.
+   * When false (the default), unresolvable pools are skipped — safer for production.
+   */
+  oracleFallbackToDefault: boolean;
+
   // Transaction polling
   txPollIntervalMs: number;
   txPollMaxAttempts: number;
@@ -208,6 +220,9 @@ export function loadConfig(): BotConfig {
     dryRun,
     autoSettleEnabled,
     defaultWinningOutcome,
+    oracleUrl,
+    oracleSecret,
+    oracleFallbackToDefault,
     txPollIntervalMs,
     txPollMaxAttempts,
     maxRetries,

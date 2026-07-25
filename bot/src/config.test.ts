@@ -132,4 +132,72 @@ describe("loadConfig", () => {
     const { loadConfig } = await import("./config.js");
     await expect(() => loadConfig()).toThrow("exit 1");
   });
+
+  // ── Oracle config fields ──────────────────────────────────────────────────
+
+  it("defaults oracle fields to null/false when env vars are absent", async () => {
+    vi.resetModules();
+    const { loadConfig } = await import("./config.js");
+    const config = loadConfig();
+
+    expect(config.oracleUrl).toBeNull();
+    expect(config.oracleSecret).toBeNull();
+    expect(config.oracleFallbackToDefault).toBe(false);
+  });
+
+  it("reads ORACLE_URL correctly", async () => {
+    process.env["ORACLE_URL"] = "https://oracle.example.com";
+    vi.resetModules();
+    const { loadConfig } = await import("./config.js");
+    const config = loadConfig();
+    expect(config.oracleUrl).toBe("https://oracle.example.com");
+  });
+
+  it("treats blank ORACLE_URL as null", async () => {
+    process.env["ORACLE_URL"] = "   ";
+    vi.resetModules();
+    const { loadConfig } = await import("./config.js");
+    const config = loadConfig();
+    expect(config.oracleUrl).toBeNull();
+  });
+
+  it("reads ORACLE_SECRET correctly", async () => {
+    process.env["ORACLE_SECRET"] = "my-bearer-token";
+    vi.resetModules();
+    const { loadConfig } = await import("./config.js");
+    const config = loadConfig();
+    expect(config.oracleSecret).toBe("my-bearer-token");
+  });
+
+  it("treats blank ORACLE_SECRET as null", async () => {
+    process.env["ORACLE_SECRET"] = "";
+    vi.resetModules();
+    const { loadConfig } = await import("./config.js");
+    const config = loadConfig();
+    expect(config.oracleSecret).toBeNull();
+  });
+
+  it("parses ORACLE_FALLBACK_TO_DEFAULT=true correctly", async () => {
+    process.env["ORACLE_FALLBACK_TO_DEFAULT"] = "true";
+    vi.resetModules();
+    const { loadConfig } = await import("./config.js");
+    const config = loadConfig();
+    expect(config.oracleFallbackToDefault).toBe(true);
+  });
+
+  it("parses ORACLE_FALLBACK_TO_DEFAULT=false correctly", async () => {
+    process.env["ORACLE_FALLBACK_TO_DEFAULT"] = "false";
+    vi.resetModules();
+    const { loadConfig } = await import("./config.js");
+    const config = loadConfig();
+    expect(config.oracleFallbackToDefault).toBe(false);
+  });
+
+  it("defaults ORACLE_FALLBACK_TO_DEFAULT to false when set to unexpected value", async () => {
+    process.env["ORACLE_FALLBACK_TO_DEFAULT"] = "yes"; // not "true"
+    vi.resetModules();
+    const { loadConfig } = await import("./config.js");
+    const config = loadConfig();
+    expect(config.oracleFallbackToDefault).toBe(false);
+  });
 });
