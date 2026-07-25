@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Bot configuration loaded from environment variables.
  *
  * All required variables are validated at startup. The process exits
@@ -49,6 +49,10 @@ export interface BotConfig {
 
   // Logging
   logLevel: LogLevel;
+
+  // Health check
+  healthCheckEnabled: boolean;
+  healthCheckPort: number;
 }
 
 function requireEnv(name: string): string {
@@ -185,6 +189,13 @@ export function loadConfig(): BotConfig {
   const webhookSecret = process.env["WEBHOOK_SECRET"]?.trim() || null;
   const logLevel = parseLogLevel(optionalEnv("LOG_LEVEL", "info"));
 
+  const healthCheckEnabled =
+    optionalEnv("HEALTH_CHECK_ENABLED", "true").toLowerCase() === "true";
+  const healthCheckPort = parsePositiveInt(
+    optionalEnv("HEALTH_CHECK_PORT", "3000"),
+    "HEALTH_CHECK_PORT",
+  );
+
   return {
     rpcUrl,
     networkPassphrase,
@@ -204,5 +215,7 @@ export function loadConfig(): BotConfig {
     webhookUrl,
     webhookSecret,
     logLevel,
+    healthCheckEnabled,
+    healthCheckPort,
   };
 }
