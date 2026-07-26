@@ -104,6 +104,7 @@ async function submitTransaction(
   assembledTx: Transaction,
   keypair: Keypair,
   config: BotConfig,
+  signal?: AbortSignal,
 ): Promise<{ hash: string; returnValue: unknown }> {
   assembledTx.sign(keypair);
   const submission = await server.sendTransaction(assembledTx);
@@ -118,7 +119,13 @@ async function submitTransaction(
 
   // Poll for finality (Stellar has ~5s block time)
   for (let poll = 0; poll < config.txPollMaxAttempts; poll++) {
+    if (signal?.aborted) {
+      throw new Error("Transaction polling aborted");
+    }
     await new Promise((r) => setTimeout(r, config.txPollIntervalMs));
+    if (signal?.aborted) {
+      throw new Error("Transaction polling aborted");
+    }
     const txResult = await server.getTransaction(hash);
 
     if (txResult.status === rpc.Api.GetTransactionStatus.SUCCESS) {
@@ -146,6 +153,7 @@ async function submitSettleBatch(
   keypair: Keypair,
   candidates: SettleCandidate[],
   config: BotConfig,
+  signal?: AbortSignal,
 ): Promise<{ txHash: string; poolResults: PoolSettleResult[] }> {
   validateSettlementOutcomes(candidates);
 
@@ -207,6 +215,7 @@ async function submitSettleBatch(
     assembledTx,
     keypair,
     config,
+    signal,
   );
 
   // Decode per-pool settlement results from the contract's Vec<SettleResult>
@@ -233,11 +242,19 @@ export class Executor {
   private readonly server: rpc.Server;
   private readonly keypair: Keypair;
   private readonly config: BotConfig;
+  private signal?: AbortSignal;
 
   constructor(config: BotConfig) {
     this.server = new rpc.Server(config.rpcUrl, { allowHttp: false });
     this.keypair = Keypair.fromSecret(config.botSecretKey);
     this.config = config;
+  }
+
+  /**
+   * Set the abort signal for in-flight operations.
+   */
+  setSignal(signal: AbortSignal): void {
+    this.signal = signal;
   }
 
   /**
@@ -253,6 +270,10 @@ export class Executor {
     const settleBatchSize = this.config.settleBatchSize;
 
     for (let i = 0; i < candidates.length; i += settleBatchSize) {
+      if (this.signal?.aborted) {
+        logger.info("Settlement aborted, stopping batch processing");
+        break;
+      }
       const batch = candidates.slice(i, i + settleBatchSize);
 
       logger.info("Submitting settle_pools batch", {
@@ -308,6 +329,7 @@ export class Executor {
             this.keypair,
             batch,
             this.config,
+            this.signal,
           );
         },
         {
