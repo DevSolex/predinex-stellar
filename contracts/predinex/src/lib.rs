@@ -2958,6 +2958,9 @@ impl PredinexContract {
         duration: u64,
         twap_period_secs: u64,
     ) -> Result<u32, ContractError> {
+        if !Self::is_initialized(&env) {
+            panic_with_error!(&env, ContractError::NotInitialized);
+        }
         creator.require_auth();
 
         let mut outcomes = Vec::new(&env);
@@ -3017,6 +3020,9 @@ impl PredinexContract {
         duration: u64,
         metadata_uri: Option<String>,
     ) -> Result<u32, ContractError> {
+        if !Self::is_initialized(&env) {
+            panic_with_error!(&env, ContractError::NotInitialized);
+        }
         creator.require_auth();
         Self::create_pool_internal(
             &env,
@@ -3044,6 +3050,9 @@ impl PredinexContract {
         metadata_uri: Option<String>,
         twap_period_secs: u64,
     ) -> Result<u32, ContractError> {
+        if !Self::is_initialized(&env) {
+            panic_with_error!(&env, ContractError::NotInitialized);
+        }
         creator.require_auth();
         Self::create_pool_internal(
             &env,
