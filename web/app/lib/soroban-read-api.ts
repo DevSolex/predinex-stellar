@@ -238,7 +238,7 @@ async function simulateContractRead(
   };
 
   try {
-    const response = await fetch(rpcUrl, {
+    const response = await fetchHorizon(rpcUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),

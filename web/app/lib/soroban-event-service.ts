@@ -20,6 +20,7 @@ import {
   notifyPoolSettled,
   notifyPayoutClaimed,
 } from './webhook-service';
+import { fetchHorizon } from './horizon-client';
 import { createScopedLogger } from './logger';
 
 const log = createScopedLogger('soroban-event-service');
@@ -473,7 +474,7 @@ export async function getUserActivityFromSoroban(
       },
     };
 
-    const response = await fetch(rpcUrl, {
+    const response = await fetchHorizon(rpcUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
